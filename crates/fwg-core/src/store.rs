@@ -5,10 +5,11 @@
 //!   which the types enforce.
 //! - Writes are atomic: temp file, `fsync`, rename, `fsync` the directory.
 
-use std::fs::{DirBuilder, File, OpenOptions, Permissions};
+use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ruleset::{FORMAT_VERSION, RuleSet};
 
@@ -28,7 +29,7 @@ const HEADER: &str = "# Managed by fwg. Change it with the `fwg` command.\n\
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     /// A filesystem operation failed.
-    #[error("cannot {action} {}: {source}", path.display())]
+    #[error("cannot {action} {}", path.display())]
     Io {
         /// What we were doing, e.g. "read".
         action: &'static str,
@@ -38,7 +39,7 @@ pub enum StoreError {
         source: io::Error,
     },
     /// The file is not valid TOML or does not match the format.
-    #[error("invalid rules file {}: {source}", path.display())]
+    #[error("invalid rules file {}", path.display())]
     Parse {
         /// The rules file.
         path: PathBuf,
@@ -199,6 +200,31 @@ impl std::ops::Deref for WriteGuard {
 }
 
 impl WriteGuard {
+    /// Copies the rules file to `rules.toml.<unix seconds>.bak` before a destructive change.
+    ///
+    /// Returns the backup path, or `None` if there was no rules file.
+    ///
+    /// # Errors
+    /// If the copy fails.
+    pub fn backup(&self) -> Result<Option<PathBuf>, StoreError> {
+        let path = self.read.dir.rules_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let backup = self
+            .read
+            .dir
+            .path()
+            .join(format!("{RULES_FILE}.{secs}.bak"));
+        fs::copy(&path, &backup).map_err(StoreError::io("back up", &path))?;
+        fs::set_permissions(&backup, Permissions::from_mode(FILE_MODE))
+            .map_err(StoreError::io("set permissions on", &backup))?;
+        Ok(Some(backup))
+    }
+
     /// Atomically replaces the rules file with `rules`.
     ///
     /// # Errors
@@ -254,7 +280,6 @@ fn parse(text: &str, path: &Path) -> Result<RuleSet, StoreError> {
 mod tests {
     use super::*;
     use crate::{Action, Policy, parse_rule};
-    use std::fs;
 
     fn dir() -> (tempfile::TempDir, ConfigDir) {
         let tmp = tempfile::tempdir().unwrap();
@@ -363,6 +388,23 @@ mod tests {
             "x".repeat(usize::try_from(MAX_RULES_FILE_BYTES).unwrap())
         );
         assert!(matches!(load_text(&huge), Err(StoreError::TooLarge { .. })));
+    }
+
+    #[test]
+    fn backup_copies_the_rules_file() {
+        let (_tmp, config) = dir();
+        let guard = config.write().unwrap();
+        assert_eq!(guard.backup().unwrap(), None);
+        guard.save(&sample()).unwrap();
+        let backup = guard.backup().unwrap().unwrap();
+        assert_eq!(
+            fs::read(&backup).unwrap(),
+            fs::read(config.rules_path()).unwrap()
+        );
+        assert_eq!(
+            fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+            FILE_MODE
+        );
     }
 
     #[test]

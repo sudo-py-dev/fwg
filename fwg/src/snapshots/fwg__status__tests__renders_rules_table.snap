@@ -1,0 +1,16 @@
+---
+source: fwg/src/status.rs
+expression: "render(&s, true, true, true)"
+---
+Status: active
+Logging: on
+Default: deny (incoming), allow (outgoing), disabled (routed)
+
+     To                         Action       From
+     --                         ------       ----
+[ 1] 22/tcp                     ALLOW IN     Anywhere                   # ssh
+[ 2] 2222/tcp                   LIMIT IN     Anywhere
+[ 3] Anywhere                   DENY IN      192.0.2.0/24
+[ 4] 10.0.0.1 5432/tcp          ALLOW IN     10.0.0.0/8 1024:65535/tcp
+[ 5] 25                         REJECT OUT   Anywhere on eth0
+[ 6] Anywhere/udp on wg0        ALLOW IN     Anywhere

@@ -27,7 +27,7 @@ pub enum NftError {
     #[error("nft not found (looked in {}); install the nftables package", NFT_PATHS.join(", "))]
     NotInstalled,
     /// Starting or talking to `nft` failed.
-    #[error("cannot run {}: {source}", program.display())]
+    #[error("cannot run {}", program.display())]
     Io {
         /// The `nft` binary.
         program: PathBuf,
