@@ -8,7 +8,9 @@ license.workspace = true
 
 [dependencies]
 fwg-core.workspace = true
+fwg-ipc.workspace = true
 fwg-nft.workspace = true
+fwg-watch.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 

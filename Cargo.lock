@@ -735,7 +735,9 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fwg-core",
+ "fwg-ipc",
  "fwg-nft",
+ "fwg-watch",
  "insta",
  "tempfile",
 ]

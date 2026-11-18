@@ -2,6 +2,8 @@
 
 mod app;
 mod cli;
+mod client;
+mod daemon;
 mod safety;
 mod status;
 
@@ -14,7 +16,8 @@ use fwg_core::ConfigDir;
 use fwg_nft::{ActiveBan, Backend, Batch, Nft, NftError, TableRef};
 
 use crate::app::App;
-use crate::cli::{Cli, Cmd};
+use crate::cli::{Cli, Cmd, JailCmd};
+use crate::client::Client;
 use crate::safety::Environment;
 
 fn main() -> ExitCode {
@@ -38,6 +41,7 @@ fn run(cli: Cli) -> Result<()> {
         SystemNft,
         Environment::detect(),
     );
+    let client = Client::new(cli.socket, client::TIMEOUT);
     let stdout = io::stdout();
     let out = &mut stdout.lock();
     match cli.command {
@@ -68,6 +72,15 @@ fn run(cli: Cli) -> Result<()> {
             app.reset(out)
         }
         Cmd::Show => app.show(out),
+        Cmd::Ban { addr, time } => daemon::ban(&client, addr, time, out),
+        Cmd::Unban { addr } => daemon::unban(&client, addr, out),
+        Cmd::Banned => daemon::banned(&client, out),
+        Cmd::Jail {
+            command: JailCmd::List,
+        } => daemon::jail_list(&client, out),
+        Cmd::Jail {
+            command: JailCmd::Status { name },
+        } => daemon::jail_status(&client, &name, out),
     }
 }
 

@@ -1,0 +1,8 @@
+---
+source: fwg/src/daemon.rs
+expression: "render_bans(&[ban(\"192.0.2.7\", \"sshd\", 3598),\nban(\"2001:db8::1234:5678\", \"manual\", 86_400 * 3 + 7200),\nban(\"198.51.100.20\", \"unknown\", 12),])"
+---
+Address              Jail     Time left
+192.0.2.7            sshd     59m 58s
+2001:db8::1234:5678  manual   3d 2h
+198.51.100.20        unknown  12s
