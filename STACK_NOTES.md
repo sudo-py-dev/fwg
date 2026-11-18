@@ -23,6 +23,7 @@ If a decision changes, update this file in the same commit.
 | Untrusted input parsed once at the edge | CLI args, config files, log lines → typed values; inner code never re-validates |
 | No shell strings | External programs (`nft`, `journalctl`) run via `std::process::Command` with an argument array, never `sh -c` |
 | The dev machine's real firewall is never touched by tests | All firewall tests run in unprivileged network namespaces (§6) or in a VM |
+| Every commit is signed; `main` changes only through pull requests | Commits are signed with an SSH key (`gpg.format ssh`); the `protect` ruleset on `main` requires signed commits, a PR review and blocks force pushes and deletion |
 
 ## 2. Language and toolchain
 
