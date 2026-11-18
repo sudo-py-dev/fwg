@@ -1,0 +1,144 @@
+//! One running jail: log messages in, ban decisions out.
+
+use std::net::IpAddr;
+use std::time::Duration;
+
+use crate::filter::Filter;
+use crate::jail::Jail;
+use crate::tracker::Tracker;
+
+/// A jail was given a filter with a different name.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("jail `{jail}` uses filter `{wanted}`, not `{given}`")]
+pub struct FilterMismatch {
+    /// The jail.
+    pub jail: String,
+    /// The filter it names.
+    pub wanted: String,
+    /// The filter it was given.
+    pub given: String,
+}
+
+/// An address that reached the jail's failure limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BanDecision {
+    /// The address to ban.
+    pub addr: IpAddr,
+    /// Failures counted in the window.
+    pub failures: usize,
+}
+
+/// A jail with its filter and failure tracker.
+#[derive(Debug, Clone)]
+pub struct Watcher {
+    jail: Jail,
+    filter: Filter,
+    tracker: Tracker,
+}
+
+impl Watcher {
+    /// Combines `jail` with the filter it names.
+    ///
+    /// # Errors
+    /// [`FilterMismatch`] if `filter` is not the jail's filter.
+    pub fn new(jail: Jail, filter: Filter) -> Result<Self, FilterMismatch> {
+        if jail.filter() != filter.name() {
+            return Err(FilterMismatch {
+                jail: jail.name().to_owned(),
+                wanted: jail.filter().to_owned(),
+                given: filter.name().to_owned(),
+            });
+        }
+        let tracker = Tracker::new(jail.max_retry(), jail.find_time());
+        Ok(Self {
+            jail,
+            filter,
+            tracker,
+        })
+    }
+
+    /// The jail.
+    #[must_use]
+    pub const fn jail(&self) -> &Jail {
+        &self.jail
+    }
+
+    /// The filter.
+    #[must_use]
+    pub const fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    /// Addresses with recent failures.
+    #[must_use]
+    pub fn tracked(&self) -> usize {
+        self.tracker.len()
+    }
+
+    /// Handles one message from `program` logged at `at` (since the Unix epoch).
+    pub fn process(&mut self, program: &str, message: &str, at: Duration) -> Option<BanDecision> {
+        if !self.filter.handles_program(program) {
+            return None;
+        }
+        let addr = self.filter.failure_source(message)?;
+        if self.jail.is_ignored(addr) {
+            return None;
+        }
+        let failures = self.tracker.record(addr, at)?;
+        Some(BanDecision { addr, failures })
+    }
+
+    /// Stops counting `addr`'s failures (after a manual ban or unban).
+    pub fn forget(&mut self, addr: IpAddr) {
+        self.tracker.forget(addr);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILTER: &str = r#"
+        description = "demo"
+        programs = ["demo"]
+        failures = ['^bad login from <HOST>$']
+    "#;
+
+    fn watcher(jail: &str) -> Watcher {
+        let jail = Jail::parse_file(jail).unwrap().remove(0);
+        Watcher::new(jail, Filter::from_toml("demo", FILTER).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn bans_after_max_retry() {
+        let mut w = watcher("[demo]\nmax_retry = 2\n");
+        let at = |s| Duration::from_secs(s);
+        assert_eq!(w.process("demo", "bad login from 192.0.2.7", at(1)), None);
+        assert_eq!(w.tracked(), 1);
+        assert_eq!(
+            w.process("demo", "bad login from 192.0.2.7", at(2)),
+            Some(BanDecision {
+                addr: "192.0.2.7".parse().unwrap(),
+                failures: 2
+            })
+        );
+    }
+
+    #[test]
+    fn ignores_other_programs_ignored_addresses_and_non_failures() {
+        let mut w = watcher("[demo]\nmax_retry = 1\nignore = [\"192.0.2.0/24\"]\n");
+        let t = Duration::from_secs(1);
+        assert_eq!(w.process("other", "bad login from 203.0.113.1", t), None);
+        assert_eq!(w.process("demo", "good login from 203.0.113.1", t), None);
+        assert_eq!(w.process("demo", "bad login from 192.0.2.9", t), None);
+        assert_eq!(w.process("demo", "bad login from 127.0.0.1", t), None);
+        assert!(w.process("demo", "bad login from 203.0.113.1", t).is_some());
+    }
+
+    #[test]
+    fn rejects_the_wrong_filter() {
+        let jail = Jail::parse_file("[sshd]\n").unwrap().remove(0);
+        let err = Watcher::new(jail, Filter::from_toml("demo", FILTER).unwrap()).unwrap_err();
+        assert_eq!(err.wanted, "sshd");
+    }
+}
