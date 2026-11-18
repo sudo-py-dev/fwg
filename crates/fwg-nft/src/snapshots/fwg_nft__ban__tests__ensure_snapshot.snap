@@ -1,0 +1,118 @@
+---
+source: crates/fwg-nft/src/ban.rs
+expression: ensure_ban_table().to_pretty_json().unwrap()
+---
+{
+  "nftables": [
+    {
+      "add": {
+        "table": {
+          "family": "inet",
+          "name": "fwg_ban"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "table": "fwg_ban",
+          "name": "ban4",
+          "type": "ipv4_addr",
+          "flags": [
+            "timeout"
+          ],
+          "size": 262144
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "table": "fwg_ban",
+          "name": "ban6",
+          "type": "ipv6_addr",
+          "flags": [
+            "timeout"
+          ],
+          "size": 262144
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "table": "fwg_ban",
+          "name": "input",
+          "type": "filter",
+          "hook": "input",
+          "prio": -10,
+          "policy": "accept"
+        }
+      }
+    },
+    {
+      "flush": {
+        "chain": {
+          "family": "inet",
+          "table": "fwg_ban",
+          "name": "input"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg_ban",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "right": "@ban4"
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg_ban",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "saddr"
+                  }
+                },
+                "right": "@ban6"
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

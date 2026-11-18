@@ -295,6 +295,10 @@ mod tests {
         fn is_loaded(&self) -> Result<bool, NftError> {
             Ok(self.loaded.get())
         }
+
+        fn bans(&self) -> Result<Vec<fwg_nft::ActiveBan>, NftError> {
+            Ok(Vec::new())
+        }
     }
 
     struct Harness {

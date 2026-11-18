@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use anyhow::{Result, bail};
 use clap::Parser;
 use fwg_core::ConfigDir;
-use fwg_nft::{Backend, Batch, Nft, NftError, TableRef};
+use fwg_nft::{ActiveBan, Backend, Batch, Nft, NftError, TableRef};
 
 use crate::app::App;
 use crate::cli::{Cli, Cmd};
@@ -101,5 +101,9 @@ impl Backend for SystemNft {
 
     fn tables(&self) -> Result<Vec<TableRef>, NftError> {
         Nft::locate()?.tables()
+    }
+
+    fn bans(&self) -> Result<Vec<ActiveBan>, NftError> {
+        Nft::locate()?.bans()
     }
 }

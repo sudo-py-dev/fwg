@@ -288,7 +288,7 @@ impl Builder {
             name: limit_set_name(index, family),
             key,
             flags: vec![SetFlag::Dynamic, SetFlag::Timeout],
-            timeout: LIMIT_SET_TIMEOUT_SECS,
+            timeout: Some(LIMIT_SET_TIMEOUT_SECS),
             size: LIMIT_SET_SIZE,
         }));
     }

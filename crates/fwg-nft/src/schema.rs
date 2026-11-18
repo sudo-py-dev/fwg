@@ -38,6 +38,8 @@ impl Batch {
 pub(crate) enum Command {
     Add(Object),
     Delete(Object),
+    /// Removes all rules of a chain (the chain itself stays).
+    Flush(Object),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -45,8 +47,12 @@ pub(crate) enum Command {
 pub(crate) enum Object {
     Table(Table),
     Chain(Chain),
+    /// A chain referred to by name only, e.g. to flush it.
+    #[serde(rename = "chain")]
+    ChainRef(ChainRef),
     Set(Set),
     Rule(Rule),
+    Element(Element),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -113,9 +119,43 @@ pub(crate) struct Set {
     #[serde(rename = "type")]
     pub key: SetKey,
     pub flags: Vec<SetFlag>,
-    /// Seconds an element lives after its last update.
-    pub timeout: u32,
+    /// Default seconds an element lives after its last update.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u32>,
+    /// Most elements the set holds.
     pub size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ChainRef {
+    pub family: Family,
+    pub table: &'static str,
+    pub name: &'static str,
+}
+
+/// Elements to add to or delete from a named set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Element {
+    pub family: Family,
+    pub table: &'static str,
+    pub name: &'static str,
+    pub elem: Vec<ElementItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum ElementItem {
+    /// `{"elem": {"val": "192.0.2.7", "timeout": 3600}}`
+    Timed { elem: TimedValue },
+    /// A bare value, as used when deleting.
+    Value(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TimedValue {
+    pub val: String,
+    /// Seconds until the kernel removes the element.
+    pub timeout: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

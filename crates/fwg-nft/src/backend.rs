@@ -1,6 +1,7 @@
 //! Running the `nft` binary.
 
 use std::io::{self, Read, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
@@ -8,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
+use crate::ban::BAN_TABLE;
 use crate::build::TABLE;
 use crate::schema::Batch;
 
@@ -57,6 +59,17 @@ pub struct TableRef {
     pub name: String,
 }
 
+/// A ban currently in the kernel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveBan {
+    /// The banned source address.
+    pub addr: IpAddr,
+    /// Length the ban was set to.
+    pub time: Duration,
+    /// Time left until the kernel lifts it.
+    pub remaining: Duration,
+}
+
 /// Something that can load and inspect nftables rules.
 ///
 /// The CLI works against this trait so its logic can be tested without root.
@@ -83,6 +96,12 @@ pub trait Backend {
             .iter()
             .any(|t| t.family == "inet" && t.name == TABLE))
     }
+
+    /// Lists the bans in table `inet fwg_ban`; empty if the table does not exist.
+    ///
+    /// # Errors
+    /// If `nft` cannot run or its output is not understood.
+    fn bans(&self) -> Result<Vec<ActiveBan>, NftError>;
 }
 
 /// The real backend: the `nft` command-line tool.
@@ -167,6 +186,59 @@ impl Backend for Nft {
         let out = self.run(&["-j", "list", "tables"], &[])?;
         parse_tables(&out)
     }
+
+    fn bans(&self) -> Result<Vec<ActiveBan>, NftError> {
+        let exists = self
+            .tables()?
+            .iter()
+            .any(|t| t.family == "inet" && t.name == BAN_TABLE);
+        if !exists {
+            return Ok(Vec::new());
+        }
+        let out = self.run(&["-j", "list", "table", "inet", BAN_TABLE], &[])?;
+        parse_bans(&out)
+    }
+}
+
+/// Extracts the elements of every set in `nft -j list table inet fwg_ban` output.
+fn parse_bans(json: &[u8]) -> Result<Vec<ActiveBan>, NftError> {
+    #[derive(Deserialize)]
+    struct Listing {
+        nftables: Vec<Entry>,
+    }
+    #[derive(Deserialize)]
+    struct Entry {
+        set: Option<SetListing>,
+    }
+    #[derive(Deserialize)]
+    struct SetListing {
+        #[serde(default)]
+        elem: Vec<ElementListing>,
+    }
+    #[derive(Deserialize)]
+    struct ElementListing {
+        elem: TimedListing,
+    }
+    #[derive(Deserialize)]
+    struct TimedListing {
+        val: IpAddr,
+        timeout: u64,
+        /// Treated as 0 (expiring now) if nft leaves it out.
+        #[serde(default)]
+        expires: u64,
+    }
+    let listing: Listing = serde_json::from_slice(json)?;
+    Ok(listing
+        .nftables
+        .into_iter()
+        .filter_map(|e| e.set)
+        .flat_map(|s| s.elem)
+        .map(|e| ActiveBan {
+            addr: e.elem.val,
+            time: Duration::from_secs(e.elem.timeout),
+            remaining: Duration::from_secs(e.elem.expires),
+        })
+        .collect())
 }
 
 /// Extracts tables from `nft -j list tables` output.
@@ -322,6 +394,76 @@ mod tests {
             .apply(&crate::teardown())
             .unwrap_err();
         assert!(matches!(err, NftError::PermissionDenied), "{err:?}");
+    }
+
+    #[test]
+    fn parses_ban_listing() {
+        // Shape captured from `nft -j list table inet fwg_ban` (nftables 1.0.9).
+        let json = br#"{"nftables": [
+            {"metainfo": {"version": "1.0.9", "release_name": "Old Doc Yak #3", "json_schema_version": 1}},
+            {"table": {"family": "inet", "name": "fwg_ban", "handle": 3}},
+            {"set": {"family": "inet", "name": "ban4", "table": "fwg_ban", "type": "ipv4_addr", "handle": 1,
+                     "size": 262144, "flags": ["timeout"],
+                     "elem": [{"elem": {"val": "192.0.2.7", "timeout": 3600, "expires": 3599}}]}},
+            {"set": {"family": "inet", "name": "ban6", "table": "fwg_ban", "type": "ipv6_addr", "handle": 2,
+                     "size": 262144, "flags": ["timeout"]}},
+            {"chain": {"family": "inet", "table": "fwg_ban", "name": "input", "handle": 3, "type": "filter",
+                       "hook": "input", "prio": -10, "policy": "accept"}}
+        ]}"#;
+        assert_eq!(
+            parse_bans(json).unwrap(),
+            vec![ActiveBan {
+                addr: "192.0.2.7".parse().unwrap(),
+                time: Duration::from_secs(3600),
+                remaining: Duration::from_secs(3599),
+            }]
+        );
+    }
+
+    #[test]
+    fn bans_in_netns() {
+        if !inside_netns("backend::tests::bans_in_netns") {
+            return;
+        }
+        let nft = Nft::locate().unwrap();
+        assert_eq!(nft.bans().unwrap(), vec![], "no table yet");
+        nft.apply(&crate::ensure_ban_table()).unwrap();
+        let hour = crate::BanTime::new(Duration::from_secs(3600)).unwrap();
+        let v4: IpAddr = "192.0.2.7".parse().unwrap();
+        let v6: IpAddr = "2001:db8::7".parse().unwrap();
+        nft.apply(&crate::ban(v4, hour)).unwrap();
+        nft.apply(&crate::ban(v6, hour)).unwrap();
+
+        // Re-creating the table and rebuilding `inet fwg` must keep both bans.
+        nft.apply(&crate::ensure_ban_table()).unwrap();
+        nft.apply(&crate::build(&fwg_core::RuleSet::default()))
+            .unwrap();
+        nft.apply(&crate::teardown()).unwrap();
+        let mut addrs: Vec<IpAddr> = nft.bans().unwrap().iter().map(|b| b.addr).collect();
+        addrs.sort();
+        assert_eq!(addrs, vec![v4, v6]);
+
+        // Re-banning replaces the time; unbanning twice is fine.
+        let minute = crate::BanTime::new(Duration::from_secs(60)).unwrap();
+        nft.apply(&crate::ban(v4, minute)).unwrap();
+        let ban = nft
+            .bans()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.addr == v4)
+            .unwrap();
+        assert_eq!(ban.time, Duration::from_secs(60));
+        assert!(ban.remaining <= Duration::from_secs(60));
+        nft.apply(&crate::unban(v4)).unwrap();
+        nft.apply(&crate::unban(v4)).unwrap();
+        assert_eq!(
+            nft.bans()
+                .unwrap()
+                .iter()
+                .map(|b| b.addr)
+                .collect::<Vec<_>>(),
+            vec![v6]
+        );
     }
 
     #[test]
