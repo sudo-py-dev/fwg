@@ -3,14 +3,14 @@ resolver = "3"
 members = ["crates/fwg-core", "crates/fwg-nft", "fwg"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-fwg-core = { path = "crates/fwg-core", version = "0.1.0" }
-fwg-nft = { path = "crates/fwg-nft", version = "0.1.0" }
+fwg-core = { path = "crates/fwg-core", version = "0.1.0-alpha.1" }
+fwg-nft = { path = "crates/fwg-nft", version = "0.1.0-alpha.1" }
 anyhow = "1.0.104"
 thiserror = "2.0.21"
 clap = { version = "4.6.8", features = ["derive", "env"] }
