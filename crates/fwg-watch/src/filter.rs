@@ -128,6 +128,12 @@ impl Filter {
         &self.description
     }
 
+    /// Program names this filter's messages come from.
+    #[must_use]
+    pub fn programs(&self) -> &[String] {
+        &self.programs
+    }
+
     /// Whether messages from `program` (syslog tag or journal identifier) are for this filter.
     #[must_use]
     pub fn handles_program(&self, program: &str) -> bool {
