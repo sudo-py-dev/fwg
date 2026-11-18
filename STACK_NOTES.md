@@ -181,7 +181,7 @@ Five tiers. Tiers 0–3 need **no root** and run on every `cargo test`.
 | 1 | Snapshots: generated nft JSON for every rule kind, the `rules.toml` format, the `status` table | `insta` | ✅ |
 | 2 | **Real nft load**: apply the generated ruleset inside an unprivileged user+network namespace, read it back with `nft -j list`, compare | `unshare -rn` (`crates/fwg-nft/tests/ruleset.rs`, `backend.rs` tests re-run themselves inside a namespace) | ✅ every scenario loads, twice, without duplicating the table |
 | 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` via `cargo test` (~7 s) | ✅ 28 checks; breaking `limit` on purpose makes it fail |
-| 4 | **Full system**: systemd unit, boot persistence, real `sshd` lockout protection, `.deb` install, coexistence with ufw, distro matrix (Debian 12/13, Ubuntu 22.04/24.04) | QEMU + KVM, cloud images, cloud-init seeded over HTTP (`-smbios type=1,serial=ds=nocloud;s=http://10.0.2.2:PORT/`) so no ISO tools are needed | ✅ Debian 13 and Ubuntu 24.04 VMs boot, provision and restart (see §6.1) |
+| 4 | **Full system**: systemd unit, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft | `vm/smoke-test.sh` (fresh VM each run, ~8 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules back after reboot |
 | 5 | CI: fmt, clippy, all tests with `FWG_REQUIRE_NETNS=1` (never skip), MSRV 1.89 check, `cargo-deny` | `.github/workflows/ci.yml`, `deny.toml` | ✅ set up |
 
 Available for traffic tests: `ip`, `tc` (latency/loss injection), `socat`, `nc`, `python3`.
@@ -290,5 +290,6 @@ copied). Change before the first public release if another licence is preferred.
 
 - [x] Download VM images (Debian 13 + Ubuntu 24.04 cloud images) for tier 4.
 - [ ] Add older targets to the VM matrix (Debian 12, Ubuntu 22.04 for nft 1.0.2).
-- [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix.
+- [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix (1.0.9 and 1.1.3 verified).
+- [ ] `.deb`/`.rpm` packaging (Phase 1 installs from source; see README).
 - [ ] Turso spike (features, MSRV, crash recovery) at the start of Phase 2.
