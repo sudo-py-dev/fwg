@@ -1,0 +1,19 @@
+[package]
+name = "fwg-nft"
+description = "nftables backend for fwg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fwg-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

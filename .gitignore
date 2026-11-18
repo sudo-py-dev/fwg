@@ -1,0 +1,5 @@
+/target
+
+# Test VMs: downloaded images, overlays, SSH keys and logs stay local
+/vm/images/
+/vm/state/
