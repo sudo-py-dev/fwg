@@ -82,6 +82,8 @@ pub struct JailStatus {
     pub max_retry: u32,
     /// Window for those failures, in seconds.
     pub find_time_secs: u64,
+    /// Length of a first ban, in seconds (repeat bans may be longer).
+    pub ban_time_secs: u64,
     /// Addresses with recent failures.
     pub tracked: usize,
     /// Bans this jail made since the daemon started.

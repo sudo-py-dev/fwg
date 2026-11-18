@@ -204,6 +204,7 @@ where
                     },
                     max_retry: jail.max_retry(),
                     find_time_secs: jail.find_time().as_secs(),
+                    ban_time_secs: jail.ban_time_for(0).as_secs(),
                     tracked: j.watcher.tracked(),
                     bans_since_start: j.bans_since_start,
                 }
@@ -394,6 +395,10 @@ mod tests {
             panic!()
         };
         assert_eq!(jails[0].bans_since_start, 2);
+        assert_eq!(
+            jails[0].ban_time_secs, 600,
+            "the first-ban length, not the doubled one"
+        );
     }
 
     #[tokio::test]
