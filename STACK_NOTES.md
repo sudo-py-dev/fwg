@@ -249,11 +249,12 @@ fwg/
 │   ├── fwg-core/         # rule model, CLI-independent parsing, config + rules files (TOML)
 │   ├── fwg-nft/          # typed nft JSON schema, ruleset builder, `Backend` trait + `nft` runner
 │   ├── fwg-store/        # (Phase 2) `Store` trait + Turso implementation
-│   ├── fwg-watch/        # (Phase 2) log sources, filters, jails
+│   ├── fwg-watch/        # filters, jails, failure tracking (log sources: 2c)
 │   └── fwg-ipc/          # (Phase 2) socket protocol types
 ├── fwg/                  # CLI binary (clap + anyhow)
 │   └── tests/netns/      # tier 3: firewall traffic checks
 ├── fwgd/                 # (Phase 2) daemon binary (tokio + anyhow)
+├── filters/              # shipped clean-room filters (TOML)
 ├── tests/netns/          # tier 3: shared namespace harness and probe tool
 ├── vm/                   # tier 4: test VMs and the smoke test
 └── dist/                 # systemd unit, packaging config
@@ -298,7 +299,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | Step | What | Where |
 |---|---|---|
 | 2a ✅ | Ban table in the kernel: `inet fwg_ban`, sets `ban4`/`ban6` (`flags timeout`, `size 262144`), chain `input` at `priority filter - 10` dropping `@ban4`/`@ban6`. Ban = add-delete-add of the element in one batch (replaces any earlier timeout), unban = add-delete (never fails on a missing address). Ban time 1 s to 365 days. Re-creating the table keeps existing bans; `fwg reload`/`disable` never touch it. | `fwg-nft` |
-| 2b | Filters (TOML, regex with `<HOST>`), jail config, sliding-window failure counter → ban decision. Pure logic, heavily tested. Clean-room `sshd` filter written from OpenSSH's own message formats. | `fwg-watch` |
+| 2b ✅ | Filters (TOML: `description`, `programs`, `failures`, `ignore`; patterns must be anchored `^…$` and have exactly one `<HOST>`), jails (`log`, `max_retry` 5, `find_time` 10m, `ban_time` 1h, optional doubling up to `ban_time_max` 1w, `ignore`), sliding-window tracker (bounded, evicts the oldest tenth when full), `Watcher` tying them together. Pure logic. Clean-room `filters/sshd.toml` from OpenSSH message formats — **to verify against real sshd output in the VM (2f)**. | `fwg-watch` |
 | 2c | Log sources: file tailer (handles rotation and truncation) and journald reader. | `fwg-watch` |
 | 2d | `Store` trait with a Turso implementation and an in-memory one for tests: ban history (for increasing ban times) and active bans (restored after reboot). | `fwg-store` |
 | 2e | `fwgd`: wiring, control socket, systemd unit, restore active bans at start. | `fwgd` |
@@ -316,8 +317,12 @@ Decisions:
   seek to 0 on truncation) instead of `notify`/inotify. Simpler, no extra dependency,
   works the same on every filesystem; 500 ms latency is fine for banning.
   `notify` is dropped from the crate list.
-- **Regex:** `regex` crate only (linear time, safe on attacker-controlled log lines).
-  `<HOST>` expands to a named group; the match must also parse as an IP address.
+- **Regex:** `regex` crate only (linear time, safe on attacker-controlled log lines),
+  1 MiB compiled-size limit per pattern. `<HOST>` expands to a named group; the match
+  must also parse as an IP address; IPv4-mapped IPv6 is treated as IPv4.
+- **Patterns must be anchored (`^…$`), enforced when a filter loads.** Log messages hold
+  attacker-chosen text (user names); an unanchored pattern could match an address the
+  attacker typed and ban someone else. Tested with injection attempts.
 - **Memory bounds:** each jail tracks at most 100 000 source addresses; when full, the
   oldest are dropped. Log lines longer than 8 KiB are skipped.
 - **Never banned:** loopback, plus each jail's `ignore` list (addresses and CIDRs).

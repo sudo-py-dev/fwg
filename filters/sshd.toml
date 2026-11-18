@@ -1,0 +1,30 @@
+# OpenSSH (sshd) login failures. Shipped with fwg; override in /etc/fwg/filters/sshd.toml.
+#
+# Patterns match the message text OpenSSH logs, without the syslog/journal prefix.
+# User names are attacker-chosen, so they are matched as \S* (no spaces) and every
+# pattern is anchored: a name containing " from <address>" cannot plant an address.
+#
+# One connection can log more than one of these (e.g. "Invalid user" and then
+# "Connection closed by invalid user"), so max_retry counts log events, not
+# connections. Messages for successful logins never match.
+
+description = "OpenSSH authentication failures"
+
+# OpenSSH 9.8+ logs from the per-connection process `sshd-session`.
+programs = ["sshd", "sshd-session"]
+
+failures = [
+    # A wrong password, key or keyboard-interactive answer.
+    '^Failed (?:password|publickey|keyboard-interactive/pam|none) for (?:invalid user )?\S* from <HOST> port \d+ ssh2(?:: .*)?$',
+    # A login attempt for a user that does not exist.
+    '^Invalid user \S* from <HOST> port \d+$',
+    # The client used up its authentication attempts.
+    '^error: maximum authentication attempts exceeded for (?:invalid user )?\S* from <HOST> port \d+ ssh2 \[preauth\]$',
+    '^Disconnecting (?:authenticating|invalid) user \S* <HOST> port \d+: Too many authentication failures \[preauth\]$',
+    # The client gave up during authentication (typical for key-only servers).
+    '^Connection (?:closed|reset) by (?:authenticating|invalid) user \S* <HOST> port \d+ \[preauth\]$',
+    # The client did not complete the SSH handshake (scanners).
+    '^Unable to negotiate with <HOST> port \d+: no matching .* found\. Their offer: .*\[preauth\]$',
+]
+
+ignore = []
