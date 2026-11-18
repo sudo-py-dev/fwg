@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use fwg_ipc::{BanInfo, JailStatus, Request, Response};
 use fwg_nft::{Backend, BanTime, NftError, ban, ensure_ban_table, unban};
 use fwg_store::{BanRecord, Store};
-use fwg_watch::{LogEvent, LogSource, Watcher};
+use fwg_watch::{LogEvent, LogSource, Span, Watcher};
 use tracing::{info, warn};
 
 /// Jail name recorded for bans made by hand.
@@ -255,7 +255,10 @@ where
             .await?;
         self.forget(addr);
         info!(%addr, seconds = time.duration().as_secs(), "banned by hand");
-        Ok(format!("banned {addr} for {}s", time.duration().as_secs()))
+        Ok(format!(
+            "banned {addr} for {}",
+            Span::from_secs(time.duration().as_secs())
+        ))
     }
 
     async fn unban(&mut self, addr: IpAddr, now: Duration) -> Result<String> {
@@ -428,7 +431,7 @@ mod tests {
         assert_eq!(
             response,
             Response::Done {
-                message: "banned 198.51.100.1 for 120s".into()
+                message: "banned 198.51.100.1 for 2m".into()
             }
         );
         assert_eq!(fake.applied().last(), Some(&ban_batch("198.51.100.1", 120)));
