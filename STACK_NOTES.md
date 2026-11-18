@@ -16,7 +16,7 @@ If a decision changes, update this file in the same commit.
 | No `unsafe` in our code | `unsafe_code = "forbid"` in `[workspace.lints.rust]` |
 | If `unsafe` is ever truly unavoidable | Only in one isolated crate, every block has `// SAFETY:` (`clippy::undocumented_unsafe_blocks = "deny"`), plus tests. Needs a note in this file first. |
 | Every public item documented | `missing_docs = "deny"` |
-| No panics in production paths | `clippy::unwrap_used`, `expect_used`, `panic` = `deny` (allowed in tests only) |
+| No panics in production paths | `clippy::unwrap_used`, `expect_used`, `panic` = `deny`; `clippy.toml` allows them in `#[test]` code, and integration-test files allow them for their helpers |
 | Typed errors in libraries | `thiserror` — every library crate exposes its own `Error` enum |
 | Contextual errors in binaries | `anyhow` + `.context("…")` at every I/O boundary |
 | Lints and formatting clean | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (pedantic on) |
@@ -27,10 +27,10 @@ If a decision changes, update this file in the same commit.
 ## 2. Language and toolchain
 
 - **Rust edition 2024**, stable channel.
-- **MSRV: 1.88** — the highest MSRV among planned dependencies (`notify` 8.2, `proptest` 1.12).
-  Edition 2024 alone needs 1.85.
+- **MSRV: 1.89** — needed for `std::fs::File::lock` (the rules-file lock, no extra crate).
+  Planned dependencies need at most 1.88 (`notify` 8.2, `proptest` 1.12). CI checks it.
   *Packaging note:* official Debian/Ubuntu packaging later needs their archive's rustc
-  to be ≥ 1.88; re-check when we get there.
+  to be ≥ 1.89; re-check when we get there.
 - `Cargo.lock` is committed (this is an application).
 
 ## 3. Config format: **TOML** (decided)
@@ -46,7 +46,7 @@ If a decision changes, update this file in the same commit.
 
 | Path | Owner | Format | Purpose |
 |---|---|---|---|
-| `/etc/fwg/fwg.toml` | **Human** (CLI never rewrites it) | TOML | Global settings: IPv6 on/off, logging level, safety options |
+| `/etc/fwg/fwg.toml` | **Human** (CLI never rewrites it) | TOML | (Phase 2) daemon settings. Not needed in Phase 1: everything there is CLI-managed state in `rules.toml`. |
 | `/etc/fwg/rules.toml` | **CLI** (`fwg allow …` writes it) | TOML | Firewall rules + default policies + enabled flag. Has `version = 1` for future migrations and a "managed by fwg" header. Hand edits are allowed but comments are not preserved. |
 | `/etc/fwg/jails.d/*.toml` | Human | TOML | (Phase 2) jail definitions |
 | `/usr/share/fwg/filters/*.toml` | Package | TOML | (Phase 2) shipped clean-room filters |
@@ -55,7 +55,12 @@ If a decision changes, update this file in the same commit.
 | `/run/fwg/fwgd.sock` | Daemon | JSON lines | (Phase 2) CLI ↔ daemon IPC, mode `0600`, root only |
 
 Writes to any file fwg owns are **atomic**: write a temp file in the same directory,
-`fsync`, then `rename` (via `tempfile::NamedTempFile::persist`). Files are created `0640`.
+`fsync`, then `rename` (via `tempfile::NamedTempFile::persist`), then `fsync` the directory.
+Files are created `0640`, `/etc/fwg` `0750`. Every access holds a lock on `/etc/fwg/.lock`
+(shared to read, exclusive to write — the write guard type is required to save), so
+concurrent `fwg` runs never lose changes. Files over 1 MiB are refused, and the format
+`version` is checked before the rest is parsed. `fwg reset` keeps
+`rules.toml.<unix-seconds>.bak`.
 Every path can be overridden (`--config-dir` / `FWG_CONFIG_DIR`) so tests never touch `/etc`.
 
 Unknown keys in config files are **rejected** (`#[serde(deny_unknown_fields)]`) so typos
@@ -106,8 +111,21 @@ Backend rules:
   8. if default is `reject`: `tcp reject with tcp reset`, then `reject` (ICMPX
      port-unreachable). Chain policy itself is always `drop` or `accept` (nftables has no
      `reject` policy).
+- `output` mirrors it: conntrack, `oif lo`, ICMPv6 (neighbour discovery must work even with
+  `default deny outgoing`), DHCP client requests, user `out` rules, reject tail.
+- **Routed traffic defaults to `disabled`: no `forward` chain at all.** A drop in our own
+  forward chain would be final even if Docker/libvirt/LXD accept the packet in their
+  tables, so fwg only filters forwarding when the user sets `fwg default deny routed`.
+- `reject` rules: TCP gets `reject with tcp reset`, everything else ICMP port-unreachable
+  (two nft rules when the rule covers both protocols).
 - `limit` rules: per-rule dynamic sets `limit4_<n>` / `limit6_<n>` (`flags dynamic,timeout`,
   `timeout 1m`, `size 65535`) — counts are per rule and per source, never shared.
+  `ct state new update @set { ip saddr limit rate over 6/minute burst 6 packets } drop`,
+  then the accept rule: 6 new connections at once, then 1 per 10 s per source.
+  ✅ Verified with traffic: 6 of 8 quick connections accepted; IPv6 counted separately.
+- `nft` is run from fixed paths only (`/usr/sbin/nft`, `/sbin/nft`, `/usr/bin/nft`,
+  `/bin/nft`), never looked up in `PATH`, because fwg runs as root. Cleared environment,
+  `LC_ALL=C`, 30 s timeout.
 - Interface names, comments and other strings are validated (length, allowed charset)
   before they reach nft — no injection through `iifname`/`comment`.
 - Minimum supported versions (**to verify in the VM matrix**, §6 tier 4):
@@ -159,20 +177,21 @@ Five tiers. Tiers 0–3 need **no root** and run on every `cargo test`.
 
 | Tier | What | Tool | Verified |
 |---|---|---|---|
-| 0 | Unit tests: rule parser, rule model, policy logic | `cargo test` | — |
-| 1 | Snapshot of generated nft JSON for every rule kind | `insta` | — |
-| 2 | **Real nft load**: apply the generated ruleset inside an unprivileged user+network namespace, read it back with `nft -j list`, compare | `unshare -rn` | ✅ works (`unshare -rn nft …` loads rulesets as non-root) |
-| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `unshare -rn` + nested `unshare -n` + `ip link … veth` + `nsenter` | ✅ works — with "allow 2222" only, port 2222 was OPEN and 8080 BLOCKED |
-| 4 | **Full system**: systemd unit, boot persistence, real `sshd` lockout protection, `.deb` install, coexistence with ufw, distro matrix (Debian 12/13, Ubuntu 22.04/24.04) | QEMU + KVM, cloud images, cloud-init seeded over HTTP (`-smbios type=1,serial=ds=nocloud;s=http://10.0.2.2:PORT/`) so no ISO tools are needed | ✅ Debian 13 and Ubuntu 24.04 VMs boot, provision and restart (see §6.1) |
-| 5 | CI | GitHub Actions (runners have root, so tiers 2–3 also run as real root) | to set up |
+| 0 | Unit tests: values, parser, rule set, rules file, nft runner, CLI logic against a fake backend, CLI binary end to end | `cargo test`, `proptest`, `assert_cmd` | ✅ |
+| 1 | Snapshots: generated nft JSON for every rule kind, the `rules.toml` format, the `status` table | `insta` | ✅ |
+| 2 | **Real nft load**: apply the generated ruleset inside an unprivileged user+network namespace, read it back with `nft -j list`, compare | `unshare -rn` (`crates/fwg-nft/tests/ruleset.rs`, `backend.rs` tests re-run themselves inside a namespace) | ✅ every scenario loads, twice, without duplicating the table |
+| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` via `cargo test` (~7 s) | ✅ 28 checks; breaking `limit` on purpose makes it fail |
+| 4 | **Full system**: systemd unit, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft | `vm/smoke-test.sh` (fresh VM each run, ~8 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules back after reboot |
+| 5 | CI: fmt, clippy, all tests with `FWG_REQUIRE_NETNS=1` (never skip), MSRV 1.89 check, `cargo-deny` | `.github/workflows/ci.yml`, `deny.toml` | ✅ set up |
 
 Available for traffic tests: `ip`, `tc` (latency/loss injection), `socat`, `nc`, `python3`.
 Missing on the host but optional: `conntrack`, `hping3`, `iperf3` (`conntrack` is installed
 inside the test VMs).
 
-Rust dev tools to install (`cargo install`): `cargo-nextest`,
-`cargo-insta`, `cargo-deny`, `cargo-llvm-cov`. `cargo-fuzz` also needs a nightly toolchain
-(`rustup toolchain install nightly`) — only for fuzzing the parsers, Phase 2.
+Optional local dev tools (`cargo install`): `cargo-nextest`, `cargo-insta` (reviewing
+snapshots; `INSTA_UPDATE=always cargo test` works without it), `cargo-deny` (CI runs it),
+`cargo-llvm-cov`. `cargo-fuzz` also needs a nightly toolchain — only for fuzzing the log
+parsers, Phase 2.
 
 **Safety rule:** never run `sudo fwg enable` on the dev machine. Real-root testing happens
 in the VM (tier 4) or CI only.
@@ -202,9 +221,8 @@ separate machine with its own kernel — breaking its firewall costs nothing.
   corruption and relies on TLS for authenticity; GPG signatures were not checked).
 - `vm/images/` and `vm/state/` (images, overlays, the test SSH key, console logs) are
   git-ignored and never leave this machine.
-- On Debian, `/usr/sbin` is not in a normal user's `PATH`. fwg runs as root, but the
-  backend must still find `nft` reliably: look in `/usr/sbin/nft` and `/sbin/nft` before
-  falling back to `PATH`.
+- On Debian, `/usr/sbin` is not in a normal user's `PATH`; fwg finds `nft` through its
+  fixed path list (§4), so this does not matter.
 
 ```bash
 vm/fwg-vm up debian            # boot (first time provisions)
@@ -226,9 +244,10 @@ fwg/
 │   ├── fwg-watch/        # (Phase 2) log sources, filters, jails
 │   └── fwg-ipc/          # (Phase 2) socket protocol types
 ├── fwg/                  # CLI binary (clap + anyhow)
+│   └── tests/netns/      # tier 3 real-traffic harness
 ├── fwgd/                 # (Phase 2) daemon binary (tokio + anyhow)
-├── tests/netns/          # tier 2–3 harness
-└── dist/                 # systemd units, packaging config
+├── vm/                   # tier 4: test VMs and the smoke test
+└── dist/                 # systemd unit, packaging config
 ```
 
 Boundaries: `fwg-core` knows nothing about nftables; `fwg-nft` depends on `fwg-core`;
@@ -238,7 +257,8 @@ lets the CLI be tested with a fake backend.
 ## 8. Phase 1 scope (CLI firewall, no daemon)
 
 Commands: `enable`, `disable`, `reload`, `status [--verbose|--numbered]`,
-`allow|deny|reject|limit [in|out] [on IFACE] <rule>`, `delete <N>`, `insert <N> <rule>`,
+`allow|deny|reject|limit [in|out] [on IFACE] <rule> [comment TEXT]`,
+`delete <N | ACTION RULE>`, `insert <N> <ACTION> <rule>`,
 `default <allow|deny|reject> [incoming|outgoing|routed]`, `logging <on|off>`, `reset`,
 `show` (print the generated ruleset without applying — dry run).
 
@@ -247,10 +267,15 @@ Rule grammar (ufw-compatible subset):
 `from <addr|cidr|any> [port P] to <addr|cidr|any> [port P] [proto tcp|udp]`.
 
 Safety in Phase 1:
-- `enable` refuses when running over SSH (`SSH_CONNECTION` set) and no rule allows the SSH
-  port, unless `--force`.
-- `enable` warns and refuses if ufw or firewalld is active, unless `--force`
-  (two firewalls both filter every packet, which confuses users).
+- `enable` refuses when running over SSH and no rule allows the SSH port, unless
+  `--force`. The port comes from `SSH_CONNECTION`; `sudo` usually removes it, so fwg also
+  walks up `/proc/<pid>/stat` looking for an `sshd`/`sshd-session` ancestor and then
+  assumes port 22 (the message says "assumed"). Existing sessions are never cut
+  (`ct state established` is accepted first); the risk is new logins.
+- `enable` refuses if ufw (`ENABLED=yes` in `/etc/ufw/ufw.conf`) or firewalld (its nft
+  table) is active, unless `--force` — two firewalls both filter every packet.
+- Every change is loaded into the kernel first and saved only if that worked; if saving
+  fails, the previous rules are loaded again.
 - Phase 2 adds `enable --confirm 60` (auto-rollback unless confirmed), done by the daemon.
 
 Not in Phase 1: route/forward rules (only the `routed` default policy), app profiles,
@@ -265,6 +290,6 @@ copied). Change before the first public release if another licence is preferred.
 
 - [x] Download VM images (Debian 13 + Ubuntu 24.04 cloud images) for tier 4.
 - [ ] Add older targets to the VM matrix (Debian 12, Ubuntu 22.04 for nft 1.0.2).
-- [ ] Install the dev tools listed in §6.
-- [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix.
+- [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix (1.0.9 and 1.1.3 verified).
+- [ ] `.deb`/`.rpm` packaging (Phase 1 installs from source; see README).
 - [ ] Turso spike (features, MSRV, crash recovery) at the start of Phase 2.

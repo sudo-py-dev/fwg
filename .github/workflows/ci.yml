@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Namespace tests must run here, never skip.
+  FWG_REQUIRE_NETNS: "1"
+
+jobs:
+  test:
+    name: fmt, clippy, tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install nftables
+        run: sudo apt-get update && sudo apt-get install -y nftables
+      - name: Prepare unprivileged network namespaces
+        # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor, and
+        # namespaces cannot load kernel modules themselves.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo modprobe -a nf_tables nft_ct nft_limit nft_log nft_reject_inet nf_log_syslog veth
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  msrv:
+    name: minimum Rust version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked
+
+  deny:
+    name: licences and advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

@@ -1,0 +1,43 @@
+---
+source: crates/fwg-core/src/store.rs
+expression: "fs::read_to_string(config.rules_path()).unwrap()"
+---
+# Managed by fwg. Change it with the `fwg` command.
+# Hand edits are allowed, but comments are not kept.
+
+version = 1
+enabled = true
+logging = true
+
+[defaults]
+incoming = "deny"
+outgoing = "deny"
+routed = "disabled"
+
+[[rules]]
+action = "allow"
+direction = "in"
+protocol = "tcp"
+to_port = "22"
+comment = "ssh"
+
+[[rules]]
+action = "allow"
+direction = "out"
+interface = "wg0"
+protocol = "udp"
+to_port = "51820"
+
+[[rules]]
+action = "allow"
+direction = "in"
+protocol = "udp"
+from = "10.0.0.0/8"
+from_port = "1024:65535"
+to_port = "53"
+
+[[rules]]
+action = "limit"
+direction = "in"
+protocol = "tcp"
+to_port = "2222"

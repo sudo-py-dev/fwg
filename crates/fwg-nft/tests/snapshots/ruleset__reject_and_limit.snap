@@ -1,0 +1,952 @@
+---
+source: crates/fwg-nft/tests/ruleset.rs
+expression: "fwg_nft::build(&set).to_pretty_json().unwrap()"
+---
+{
+  "nftables": [
+    {
+      "add": {
+        "table": {
+          "family": "inet",
+          "name": "fwg"
+        }
+      }
+    },
+    {
+      "delete": {
+        "table": {
+          "family": "inet",
+          "name": "fwg"
+        }
+      }
+    },
+    {
+      "add": {
+        "table": {
+          "family": "inet",
+          "name": "fwg"
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "table": "fwg",
+          "name": "limit4_4",
+          "type": "ipv4_addr",
+          "flags": [
+            "dynamic",
+            "timeout"
+          ],
+          "timeout": 60,
+          "size": 65535
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "table": "fwg",
+          "name": "limit6_4",
+          "type": "ipv6_addr",
+          "flags": [
+            "dynamic",
+            "timeout"
+          ],
+          "timeout": 60,
+          "size": 65535
+        }
+      }
+    },
+    {
+      "add": {
+        "set": {
+          "family": "inet",
+          "table": "fwg",
+          "name": "limit4_5",
+          "type": "ipv4_addr",
+          "flags": [
+            "dynamic",
+            "timeout"
+          ],
+          "timeout": 60,
+          "size": 65535
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "table": "fwg",
+          "name": "input",
+          "type": "filter",
+          "hook": "input",
+          "prio": 0,
+          "policy": "drop"
+        }
+      }
+    },
+    {
+      "add": {
+        "chain": {
+          "family": "inet",
+          "table": "fwg",
+          "name": "output",
+          "type": "filter",
+          "hook": "output",
+          "prio": 0,
+          "policy": "accept"
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": [
+                  "established",
+                  "related"
+                ]
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": "invalid"
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "iif"
+                  }
+                },
+                "right": "lo"
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "right": {
+                  "set": [
+                    "icmp",
+                    "ipv6-icmp"
+                  ]
+                }
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "sport"
+                  }
+                },
+                "right": 67
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 68
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "sport"
+                  }
+                },
+                "right": 547
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 546
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": [
+                  "established",
+                  "related"
+                ]
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": "invalid"
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "oif"
+                  }
+                },
+                "right": "lo"
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "right": "ipv6-icmp"
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "sport"
+                  }
+                },
+                "right": 68
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 67
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "output",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "sport"
+                  }
+                },
+                "right": 546
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 547
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 23
+              }
+            },
+            {
+              "reject": {
+                "type": "tcp reset"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "right": {
+                  "set": [
+                    "tcp",
+                    "udp"
+                  ]
+                }
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "th",
+                    "field": "dport"
+                  }
+                },
+                "right": 23
+              }
+            },
+            {
+              "reject": {
+                "type": "icmpx",
+                "expr": "port-unreachable"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 25
+              }
+            },
+            {
+              "reject": {
+                "type": "tcp reset"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "udp",
+                    "field": "dport"
+                  }
+                },
+                "right": 69
+              }
+            },
+            {
+              "reject": {
+                "type": "icmpx",
+                "expr": "port-unreachable"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "right": "198.51.100.7"
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "l4proto"
+                  }
+                },
+                "right": "tcp"
+              }
+            },
+            {
+              "reject": {
+                "type": "tcp reset"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "right": "198.51.100.7"
+              }
+            },
+            {
+              "reject": {
+                "type": "icmpx",
+                "expr": "port-unreachable"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 22
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "right": "ipv4"
+              }
+            },
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": "new"
+              }
+            },
+            {
+              "set": {
+                "op": "update",
+                "elem": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "set": "@limit4_4",
+                "stmt": [
+                  {
+                    "limit": {
+                      "rate": 6,
+                      "per": "minute",
+                      "burst": 6,
+                      "inv": true
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 22
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "meta": {
+                    "key": "nfproto"
+                  }
+                },
+                "right": "ipv6"
+              }
+            },
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": "new"
+              }
+            },
+            {
+              "set": {
+                "op": "update",
+                "elem": {
+                  "payload": {
+                    "protocol": "ip6",
+                    "field": "saddr"
+                  }
+                },
+                "set": "@limit6_4",
+                "stmt": [
+                  {
+                    "limit": {
+                      "rate": 6,
+                      "per": "minute",
+                      "burst": 6,
+                      "inv": true
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 22
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "right": {
+                  "prefix": {
+                    "addr": "10.0.0.0",
+                    "len": 8
+                  }
+                }
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 2222
+              }
+            },
+            {
+              "match": {
+                "op": "in",
+                "left": {
+                  "ct": {
+                    "key": "state"
+                  }
+                },
+                "right": "new"
+              }
+            },
+            {
+              "set": {
+                "op": "update",
+                "elem": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "set": "@limit4_5",
+                "stmt": [
+                  {
+                    "limit": {
+                      "rate": 6,
+                      "per": "minute",
+                      "burst": 6,
+                      "inv": true
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "drop": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "add": {
+        "rule": {
+          "family": "inet",
+          "table": "fwg",
+          "chain": "input",
+          "expr": [
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "ip",
+                    "field": "saddr"
+                  }
+                },
+                "right": {
+                  "prefix": {
+                    "addr": "10.0.0.0",
+                    "len": 8
+                  }
+                }
+              }
+            },
+            {
+              "match": {
+                "op": "==",
+                "left": {
+                  "payload": {
+                    "protocol": "tcp",
+                    "field": "dport"
+                  }
+                },
+                "right": 2222
+              }
+            },
+            {
+              "accept": null
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

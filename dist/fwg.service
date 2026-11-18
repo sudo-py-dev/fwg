@@ -1,0 +1,31 @@
+[Unit]
+Description=fwg firewall
+# Load the rules before any network interface comes up.
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Loads the saved rules if the firewall is enabled; does nothing otherwise.
+ExecStart=/usr/sbin/fwg reload
+
+# fwg only needs to read its config and talk to nftables over netlink.
+ConfigurationDirectory=fwg
+ConfigurationDirectoryMode=0750
+ReadWritePaths=/etc/fwg
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=sysinit.target
