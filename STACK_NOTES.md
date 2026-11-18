@@ -29,7 +29,7 @@ If a decision changes, update this file in the same commit.
 
 - **Rust edition 2024**, stable channel.
 - **MSRV: 1.89** — needed for `std::fs::File::lock` (the rules-file lock, no extra crate).
-  Planned dependencies need at most 1.88 (`notify` 8.2, `proptest` 1.12). CI checks it.
+  Other dependencies need at most 1.88 (`proptest` 1.12). CI checks it.
   *Packaging note:* official Debian/Ubuntu packaging later needs their archive's rustc
   to be ≥ 1.89; re-check when we get there.
 - `Cargo.lock` is committed (this is an application).
@@ -148,9 +148,7 @@ Exact JSON for every construct above was captured from real nft output on this m
 | Atomic writes | `tempfile` | 3.27.0 | MIT/Apache | 1 |
 | Async runtime | `tokio` | 1.54.1 | MIT | 2 |
 | Logging | `tracing`, `tracing-subscriber` | 0.1.44 / 0.3.23 | MIT | 2 |
-| File watching | `notify` | 8.2.2 | CC0 | 2 |
 | Regex | `regex` | 1.13.2 | MIT/Apache | 2 — **linear time, ReDoS-safe** on attacker-controlled log lines |
-| Dates | `jiff` | 1.0.1 | Unlicense/MIT | 2 |
 | Database | `turso` **pinned `=0.8.3`** | 0.8.3 | MIT | 2 |
 | Tests | `insta` (snapshots), `proptest`, `assert_cmd` | 1.49.0 / 1.12.0 / 2.2.2 | Apache / MIT/Apache | 1 |
 
@@ -161,9 +159,17 @@ No crate is added without a line in this table.
 - Lives only in `fwg-store`, behind a `Store` trait. Nothing else imports `turso`.
 - **The firewall never depends on the DB.** Active bans live in the kernel (`fwg_ban` sets
   with timeouts). If the DB is broken, protection keeps working; the daemon rebuilds state.
-- Phase 2 spike before use: check the default features (0.8.3 pulls `hyper`/`rustls` for
-  sync — disable them with `default-features = false` if possible), check it builds with
-  our MSRV, and test kill-during-write recovery.
+- Used with `default-features = false`: drops `mimalloc` (a C allocator that would replace
+  the global allocator) and `fts` (full-text search). Network sync (`hyper`, `rustls`) is
+  already opt-in and stays off.
+- ✅ Spike (2026-11-18): a writer committing 2-row transactions was `kill -9`ed at random
+  30 times. Every reported commit survived, at most the one in-flight commit appeared,
+  no transaction was ever half-written, `PRAGMA integrity_check` stayed `ok`.
+  This covers process crashes, not power loss (page cache survives `kill -9`); a VM
+  hard-reset test is still open.
+- ⚠️ Cost: 234 crates and ~4 min for a debug build. Acceptable because **only the daemon
+  (`fwgd`) links it**; the `fwg` CLI asks the daemon over the socket and stays small.
+- Turso declares no `rust-version`; the CI MSRV job is the check.
 - `forbid(unsafe_code)` covers *our* crates only; dependencies (including Turso) contain
   `unsafe` internally. That is audited with `cargo-deny` (advisories) and reviewed on
   upgrades.
@@ -171,6 +177,7 @@ No crate is added without a line in this table.
 ### journald
 Read with `journalctl -f -o json --cursor-file …` as a child process (argument array)
 instead of the `systemd` crate's C bindings — keeps us free of FFI `unsafe`.
+The event time is journald's `__REALTIME_TIMESTAMP`, so no date parsing is needed.
 
 ## 6. Testing environment (verified on this machine)
 
@@ -282,15 +289,55 @@ Safety in Phase 1:
 Not in Phase 1: route/forward rules (only the `routed` default policy), app profiles,
 NAT.
 
-## 9. Licence
+## 9. Phase 2 design (log watching and banning)
+
+The fail2ban part. A daemon, `fwgd`, reads logs, matches failures per source address and
+bans repeat offenders in the kernel. Built in PR-sized steps:
+
+| Step | What | Where |
+|---|---|---|
+| 2a | Ban table in the kernel: `inet fwg_ban`, sets `ban4`/`ban6` (`flags timeout`), chain `input` at `priority filter - 10` dropping `@ban4`/`@ban6`. Add/remove elements with a timeout. Never touched by `fwg reload`. | `fwg-nft` |
+| 2b | Filters (TOML, regex with `<HOST>`), jail config, sliding-window failure counter → ban decision. Pure logic, heavily tested. Clean-room `sshd` filter written from OpenSSH's own message formats. | `fwg-watch` |
+| 2c | Log sources: file tailer (handles rotation and truncation) and journald reader. | `fwg-watch` |
+| 2d | `Store` trait with a Turso implementation and an in-memory one for tests: ban history (for increasing ban times) and active bans (restored after reboot). | `fwg-store` |
+| 2e | `fwgd`: wiring, control socket, systemd unit, restore active bans at start. | `fwgd` |
+| 2f | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`. VM test: a real SSH brute force from the host gets banned. | `fwg` |
+
+Decisions:
+
+- **Kernel holds the truth for active bans.** Timeouts expire in the kernel, so a crashed
+  daemon never leaves a ban stuck and never lifts one early. The DB is history plus a
+  copy used to restore bans after a reboot (kernel sets are empty at boot).
+- **Event time:** journald's timestamp; for files, the time the line was read. fwgd only
+  follows new lines (it starts at the end of a file), so read time is accurate and no
+  log date parsing is needed. Reading old log backlogs is out of scope.
+- **File tailing by polling** (every 500 ms: compare inode and size, reopen on rotation,
+  seek to 0 on truncation) instead of `notify`/inotify. Simpler, no extra dependency,
+  works the same on every filesystem; 500 ms latency is fine for banning.
+  `notify` is dropped from the crate list.
+- **Regex:** `regex` crate only (linear time, safe on attacker-controlled log lines).
+  `<HOST>` expands to a named group; the match must also parse as an IP address.
+- **Memory bounds:** each jail tracks at most 100 000 source addresses; when full, the
+  oldest are dropped. Log lines longer than 8 KiB are skipped.
+- **Never banned:** loopback, plus each jail's `ignore` list (addresses and CIDRs).
+- **Increasing ban time:** optional per jail: each repeat ban doubles the time, capped by
+  `ban_time_max`.
+- **Control socket:** `/run/fwg/fwgd.sock`, mode `0600`, and the daemon also checks the
+  peer's uid is 0 (`SO_PEERCRED` through tokio's safe API). JSON lines, one request per line.
+- **Config:** jails in `/etc/fwg/jails.d/*.toml` (human-owned, never rewritten); shipped
+  filters in `/usr/share/fwg/filters/`, local overrides in `/etc/fwg/filters/`.
+  `fwgd --check` validates everything without starting.
+
+## 10. Licence
 
 Default: **MIT OR Apache-2.0** (clean-room: no ufw/fail2ban code, regex, or test files
 copied). Change before the first public release if another licence is preferred.
 
-## 10. Open items
+## 11. Open items
 
 - [x] Download VM images (Debian 13 + Ubuntu 24.04 cloud images) for tier 4.
 - [ ] Add older targets to the VM matrix (Debian 12, Ubuntu 22.04 for nft 1.0.2).
 - [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix (1.0.9 and 1.1.3 verified).
 - [ ] `.deb`/`.rpm` packaging (Phase 1 installs from source; see README).
-- [ ] Turso spike (features, MSRV, crash recovery) at the start of Phase 2.
+- [x] Turso spike (features, crash recovery) — see §5. MSRV checked by CI.
+- [ ] Turso power-loss test (VM hard reset during writes).
