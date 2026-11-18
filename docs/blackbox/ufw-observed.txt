@@ -1,0 +1,848 @@
+## Versions
+ufw 0.36.2
+nftables v1.0.9 (Old Doc Yak #3)
+6.8.0-147-generic
+
+## Before ufw is enabled
+tables: table ip filter table ip6 filter 
+
+### allow SSH while disabled
+$ sudo ufw allow 22/tcp
+  > Rules updated
+  > Rules updated (v6)
+kernel rule changes:
+  < 		counter packets 2757 bytes 248548 jump ufw-before-logging-input
+  < 		counter packets 2757 bytes 248548 jump ufw-before-input
+  < 		counter packets 73 bytes 8499 jump ufw-after-input
+  < 		counter packets 73 bytes 8499 jump ufw-after-logging-input
+  < 		counter packets 73 bytes 8499 jump ufw-reject-input
+  < 		counter packets 73 bytes 8499 jump ufw-track-input
+  > 		counter packets 2770 bytes 249608 jump ufw-before-logging-input
+  > 		counter packets 2770 bytes 249608 jump ufw-before-input
+  > 		counter packets 86 bytes 9559 jump ufw-after-input
+  > 		counter packets 86 bytes 9559 jump ufw-after-logging-input
+  > 		counter packets 86 bytes 9559 jump ufw-reject-input
+  > 		counter packets 86 bytes 9559 jump ufw-track-input
+  < 		counter packets 2713 bytes 302294 jump ufw-before-logging-output
+  < 		counter packets 2713 bytes 302294 jump ufw-before-output
+  < 		counter packets 69 bytes 9451 jump ufw-after-output
+  < 		counter packets 69 bytes 9451 jump ufw-after-logging-output
+  < 		counter packets 69 bytes 9451 jump ufw-reject-output
+  < 		counter packets 69 bytes 9451 jump ufw-track-output
+  > 		counter packets 2726 bytes 303430 jump ufw-before-logging-output
+  > 		counter packets 2726 bytes 303430 jump ufw-before-output
+  > 		counter packets 82 bytes 10587 jump ufw-after-output
+  > 		counter packets 82 bytes 10587 jump ufw-after-logging-output
+  > 		counter packets 82 bytes 10587 jump ufw-reject-output
+  > 		counter packets 82 bytes 10587 jump ufw-track-output
+
+### enable
+$ sudo ufw --force enable
+  > Firewall is active and enabled on system startup
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  > 		iifname "lo" accept
+  > 		ct state related,established accept
+  > 		ct state invalid jump ufw-logging-deny
+  > 		ct state invalid drop
+  > 		ip protocol icmp icmp type destination-unreachable accept
+  > 		ip protocol icmp icmp type time-exceeded accept
+  > 		ip protocol icmp icmp type parameter-problem accept
+  > 		ip protocol icmp icmp type echo-request accept
+  > 		udp sport 67 udp dport 68 accept
+  > 		counter packets 0 bytes 0 jump ufw-not-local
+  > 		ip daddr 224.0.0.251 udp dport 5353 accept
+  > 		ip daddr 239.255.255.250 udp dport 1900 accept
+  > 		counter packets 0 bytes 0 jump ufw-user-input
+  > 		oifname "lo" accept
+  > 		ct state related,established accept
+  > 		counter packets 1 bytes 132 jump ufw-user-output
+  > 		ct state related,established accept
+  > 		ip protocol icmp icmp type destination-unreachable accept
+  > 		ip protocol icmp icmp type time-exceeded accept
+  > 		ip protocol icmp icmp type parameter-problem accept
+  > 		ip protocol icmp icmp type echo-request accept
+  > 		counter packets 0 bytes 0 jump ufw-user-forward
+  > 		udp dport 137 jump ufw-skip-to-policy-input
+  > 		udp dport 138 jump ufw-skip-to-policy-input
+  > 		tcp dport 139 jump ufw-skip-to-policy-input
+  > 		tcp dport 445 jump ufw-skip-to-policy-input
+  > 		udp dport 67 jump ufw-skip-to-policy-input
+  > 		udp dport 68 jump ufw-skip-to-policy-input
+  > 		fib daddr type broadcast jump ufw-skip-to-policy-input
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW BLOCK] "
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW BLOCK] "
+  > 		ip protocol tcp ct state new accept
+  > 		ip protocol udp ct state new accept
+  < 		type filter hook input priority filter; policy accept;
+  < 		counter packets 2778 bytes 250108 jump ufw-before-logging-input
+  < 		counter packets 2778 bytes 250108 jump ufw-before-input
+  < 		counter packets 94 bytes 10059 jump ufw-after-input
+  < 		counter packets 94 bytes 10059 jump ufw-after-logging-input
+  < 		counter packets 94 bytes 10059 jump ufw-reject-input
+  < 		counter packets 94 bytes 10059 jump ufw-track-input
+  > 		type filter hook input priority filter; policy drop;
+  > 		counter packets 2787 bytes 250828 jump ufw-before-logging-input
+  > 		counter packets 2787 bytes 250828 jump ufw-before-input
+  > 		counter packets 98 bytes 10399 jump ufw-after-input
+  > 		counter packets 98 bytes 10399 jump ufw-after-logging-input
+  > 		counter packets 98 bytes 10399 jump ufw-reject-input
+  > 		counter packets 98 bytes 10399 jump ufw-track-input
+  < 		counter packets 2733 bytes 305558 jump ufw-before-logging-output
+  < 		counter packets 2733 bytes 305558 jump ufw-before-output
+  < 		counter packets 89 bytes 12715 jump ufw-after-output
+  < 		counter packets 89 bytes 12715 jump ufw-after-logging-output
+  < 		counter packets 89 bytes 12715 jump ufw-reject-output
+  < 		counter packets 89 bytes 12715 jump ufw-track-output
+  > 		counter packets 2742 bytes 306370 jump ufw-before-logging-output
+  > 		counter packets 2742 bytes 306370 jump ufw-before-output
+  > 		counter packets 94 bytes 13187 jump ufw-after-output
+  > 		counter packets 94 bytes 13187 jump ufw-after-logging-output
+  > 		counter packets 94 bytes 13187 jump ufw-reject-output
+  > 		counter packets 94 bytes 13187 jump ufw-track-output
+  < 		type filter hook forward priority filter; policy accept;
+  > 		type filter hook forward priority filter; policy drop;
+  > 	chain ufw-logging-deny {
+  > 		ct state invalid limit rate 3/minute burst 10 packets return
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW BLOCK] "
+  > 	}
+  > 	chain ufw-logging-allow {
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW ALLOW] "
+  > 	}
+  > 	chain ufw-skip-to-policy-input {
+  > 		counter packets 0 bytes 0 drop
+  > 	}
+  > 	chain ufw-skip-to-policy-output {
+  > 		counter packets 0 bytes 0 accept
+  > 	}
+  > 	chain ufw-skip-to-policy-forward {
+  > 		counter packets 0 bytes 0 drop
+  > 	}
+  > 	chain ufw-not-local {
+  > 		fib daddr type local return
+  > 		fib daddr type multicast return
+  > 		fib daddr type broadcast return
+  > 		limit rate 3/minute burst 10 packets jump ufw-logging-deny
+  > 		counter packets 0 bytes 0 drop
+  > 	}
+  > 	chain ufw-user-input {
+  > 		tcp dport 22 accept
+  > 	}
+  > 	chain ufw-user-output {
+  > 	}
+  > 	chain ufw-user-forward {
+  > 	}
+  > 	chain ufw-user-logging-input {
+  > 	}
+  > 	chain ufw-user-logging-output {
+  > 	}
+  > 	chain ufw-user-logging-forward {
+  > 	}
+  > 	chain ufw-user-limit {
+  > 		limit rate 3/minute burst 5 packets log prefix "[UFW LIMIT BLOCK] "
+  > 		counter packets 0 bytes 0 reject
+  > 	}
+  > 	chain ufw-user-limit-accept {
+  > 		counter packets 0 bytes 0 accept
+  > 	}
+  > 		iifname "lo" accept
+  > 		rt type 0 drop
+  > 		ct state related,established accept
+  > 		meta l4proto ipv6-icmp icmpv6 type echo-reply accept
+  > 		ct state invalid jump ufw6-logging-deny
+  > 		ct state invalid drop
+  > 		meta l4proto ipv6-icmp icmpv6 type destination-unreachable accept
+  > 		meta l4proto ipv6-icmp icmpv6 type packet-too-big accept
+  > 		meta l4proto ipv6-icmp icmpv6 type time-exceeded accept
+  > 		meta l4proto ipv6-icmp icmpv6 type parameter-problem accept
+  > 		meta l4proto ipv6-icmp icmpv6 type echo-request accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-router-solicit ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-router-advert ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-neighbor-solicit ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-neighbor-advert ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-query accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-report accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-done accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 1 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 1 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 1 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" accept
+  > 		ip6 saddr fe80::/10 ip6 daddr fe80::/10 udp sport 547 udp dport 546 accept
+  > 		ip6 daddr ff02::fb udp dport 5353 accept
+  > 		ip6 daddr ff02::f udp dport 1900 accept
+  > 		counter packets 0 bytes 0 jump ufw6-user-input
+  > 		oifname "lo" accept
+  > 		rt type 0 drop
+  > 		ct state related,established accept
+  > 		meta l4proto ipv6-icmp icmpv6 type destination-unreachable accept
+  > 		meta l4proto ipv6-icmp icmpv6 type packet-too-big accept
+  > 		meta l4proto ipv6-icmp icmpv6 type time-exceeded accept
+  > 		meta l4proto ipv6-icmp icmpv6 type parameter-problem accept
+  > 		meta l4proto ipv6-icmp icmpv6 type echo-request accept
+  > 		meta l4proto ipv6-icmp icmpv6 type echo-reply accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-router-solicit ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-neighbor-advert ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-neighbor-solicit ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp icmpv6 type nd-router-advert ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-query accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-report accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp icmpv6 type mld-listener-done accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 255 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 1 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 1 accept
+  > 		ip6 saddr fe80::/10 meta l4proto ipv6-icmp xt match "icmp6" ip6 hoplimit 1 accept
+  > 		counter packets 0 bytes 0 jump ufw6-user-output
+  > 		rt type 0 drop
+  > 		ct state related,established accept
+  > 		meta l4proto ipv6-icmp icmpv6 type destination-unreachable accept
+  > 		meta l4proto ipv6-icmp icmpv6 type packet-too-big accept
+  > 		meta l4proto ipv6-icmp icmpv6 type time-exceeded accept
+  > 		meta l4proto ipv6-icmp icmpv6 type parameter-problem accept
+  > 		meta l4proto ipv6-icmp icmpv6 type echo-request accept
+  > 		meta l4proto ipv6-icmp icmpv6 type echo-reply accept
+  > 		counter packets 0 bytes 0 jump ufw6-user-forward
+  > 		udp dport 137 jump ufw6-skip-to-policy-input
+  > 		udp dport 138 jump ufw6-skip-to-policy-input
+  > 		tcp dport 139 jump ufw6-skip-to-policy-input
+  > 		tcp dport 445 jump ufw6-skip-to-policy-input
+  > 		udp dport 546 jump ufw6-skip-to-policy-input
+  > 		udp dport 547 jump ufw6-skip-to-policy-input
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW BLOCK] "
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW BLOCK] "
+  > 		meta l4proto tcp ct state new accept
+  > 		meta l4proto udp ct state new accept
+  < 		type filter hook input priority filter; policy accept;
+  > 		type filter hook input priority filter; policy drop;
+  < 		type filter hook forward priority filter; policy accept;
+  > 		type filter hook forward priority filter; policy drop;
+  > 	}
+  > 	chain ufw6-logging-deny {
+  > 		ct state invalid limit rate 3/minute burst 10 packets return
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW BLOCK] "
+  > 	}
+  > 	chain ufw6-logging-allow {
+  > 		limit rate 3/minute burst 10 packets log prefix "[UFW ALLOW] "
+  > 	}
+  > 	chain ufw6-skip-to-policy-input {
+  > 		counter packets 0 bytes 0 drop
+  > 	}
+  > 	chain ufw6-skip-to-policy-output {
+  > 		counter packets 0 bytes 0 accept
+  > 	}
+  > 	chain ufw6-skip-to-policy-forward {
+  > 		counter packets 0 bytes 0 drop
+  > 	}
+  > 	chain ufw6-user-input {
+  > 		tcp dport 22 accept
+  > 	}
+  > 	chain ufw6-user-output {
+  > 	}
+  > 	chain ufw6-user-forward {
+  > 	}
+  > 	chain ufw6-user-logging-input {
+  > 	}
+  > 	chain ufw6-user-logging-output {
+  > 	}
+  > 	chain ufw6-user-logging-forward {
+  > 	}
+  > 	chain ufw6-user-limit {
+  > 		limit rate 3/minute burst 5 packets log prefix "[UFW LIMIT BLOCK] "
+  > 		counter packets 0 bytes 0 reject
+  > 	}
+  > 	chain ufw6-user-limit-accept {
+  > 		counter packets 0 bytes 0 accept
+tables after enable: table ip filter table ip6 filter 
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+chain count: 69
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+rule count: 172
+base chains (hook, priority, policy):
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+        2 		type filter hook forward priority filter; policy drop;
+        2 		type filter hook input priority filter; policy drop;
+        2 		type filter hook output priority filter; policy accept;
+
+### simple port list
+$ sudo ufw allow 80,443/tcp
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2829 bytes 253408 jump ufw-before-logging-input
+  < 		counter packets 2829 bytes 253408 jump ufw-before-input
+  > 		counter packets 2844 bytes 254548 jump ufw-before-logging-input
+  > 		counter packets 2844 bytes 254548 jump ufw-before-input
+  < 		counter packets 2778 bytes 321138 jump ufw-before-logging-output
+  < 		counter packets 2778 bytes 321138 jump ufw-before-output
+  > 		counter packets 2793 bytes 322570 jump ufw-before-logging-output
+  > 		counter packets 2793 bytes 322570 jump ufw-before-output
+  > 		ip protocol tcp tcp dport { 80, 443 } accept
+  > 		meta l4proto tcp tcp dport { 80, 443 } accept
+
+### port range needs protocol?
+$ sudo ufw allow 60000:61000
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > ERROR: Must specify 'tcp' or 'udp' with multiple ports
+  > (exit status 1)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2853 bytes 255088 jump ufw-before-logging-input
+  < 		counter packets 2853 bytes 255088 jump ufw-before-input
+  > 		counter packets 2864 bytes 255888 jump ufw-before-logging-input
+  > 		counter packets 2864 bytes 255888 jump ufw-before-input
+  < 		counter packets 2802 bytes 324162 jump ufw-before-logging-output
+  < 		counter packets 2802 bytes 324162 jump ufw-before-output
+  > 		counter packets 2813 bytes 325294 jump ufw-before-logging-output
+  > 		counter packets 2813 bytes 325294 jump ufw-before-output
+
+### port range with protocol
+$ sudo ufw allow 60000:61000/udp
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2873 bytes 256428 jump ufw-before-logging-input
+  < 		counter packets 2873 bytes 256428 jump ufw-before-input
+  > 		counter packets 2884 bytes 257228 jump ufw-before-logging-input
+  > 		counter packets 2884 bytes 257228 jump ufw-before-input
+  < 		counter packets 2822 bytes 326782 jump ufw-before-logging-output
+  < 		counter packets 2822 bytes 326782 jump ufw-before-output
+  > 		counter packets 2833 bytes 327874 jump ufw-before-logging-output
+  > 		counter packets 2833 bytes 327874 jump ufw-before-output
+  > 		ip protocol udp udp dport 60000-61000 accept
+  > 		meta l4proto udp udp dport 60000-61000 accept
+
+### port without protocol
+$ sudo ufw allow 53
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2893 bytes 257768 jump ufw-before-logging-input
+  < 		counter packets 2893 bytes 257768 jump ufw-before-input
+  > 		counter packets 2904 bytes 258568 jump ufw-before-logging-input
+  > 		counter packets 2904 bytes 258568 jump ufw-before-input
+  < 		counter packets 2842 bytes 329450 jump ufw-before-logging-output
+  < 		counter packets 2842 bytes 329450 jump ufw-before-output
+  > 		counter packets 2853 bytes 330542 jump ufw-before-logging-output
+  > 		counter packets 2853 bytes 330542 jump ufw-before-output
+  > 		tcp dport 53 accept
+  > 		udp dport 53 accept
+  > 		tcp dport 53 accept
+  > 		udp dport 53 accept
+
+### full form
+$ sudo ufw allow from 10.0.0.0/8 to any port 5432 proto tcp
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2913 bytes 259108 jump ufw-before-logging-input
+  < 		counter packets 2913 bytes 259108 jump ufw-before-input
+  > 		counter packets 2928 bytes 260248 jump ufw-before-logging-input
+  > 		counter packets 2928 bytes 260248 jump ufw-before-input
+  < 		counter packets 2862 bytes 332150 jump ufw-before-logging-output
+  < 		counter packets 2862 bytes 332150 jump ufw-before-output
+  > 		counter packets 2877 bytes 333558 jump ufw-before-logging-output
+  > 		counter packets 2877 bytes 333558 jump ufw-before-output
+  > 		ip saddr 10.0.0.0/8 tcp dport 5432 accept
+
+### IPv6 source
+$ sudo ufw allow from 2001:db8::/32 to any port 53
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2937 bytes 260788 jump ufw-before-logging-input
+  < 		counter packets 2937 bytes 260788 jump ufw-before-input
+  > 		counter packets 2948 bytes 261588 jump ufw-before-logging-input
+  > 		counter packets 2948 bytes 261588 jump ufw-before-input
+  < 		counter packets 2886 bytes 335102 jump ufw-before-logging-output
+  < 		counter packets 2886 bytes 335102 jump ufw-before-output
+  > 		counter packets 2897 bytes 336178 jump ufw-before-logging-output
+  > 		counter packets 2897 bytes 336178 jump ufw-before-output
+  > 		ip6 saddr 2001:db8::/32 tcp dport 53 accept
+  > 		ip6 saddr 2001:db8::/32 udp dport 53 accept
+
+### outgoing deny
+$ sudo ufw deny out 25
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2957 bytes 262128 jump ufw-before-logging-input
+  < 		counter packets 2957 bytes 262128 jump ufw-before-input
+  > 		counter packets 2968 bytes 262928 jump ufw-before-logging-input
+  > 		counter packets 2968 bytes 262928 jump ufw-before-input
+  < 		counter packets 2906 bytes 337738 jump ufw-before-logging-output
+  < 		counter packets 2906 bytes 337738 jump ufw-before-output
+  > 		counter packets 2917 bytes 338830 jump ufw-before-logging-output
+  > 		counter packets 2917 bytes 338830 jump ufw-before-output
+  > 		tcp dport 25 drop
+  > 		udp dport 25 drop
+  > 		tcp dport 25 drop
+  > 		udp dport 25 drop
+
+### reject
+$ sudo ufw reject 2323
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2977 bytes 263468 jump ufw-before-logging-input
+  < 		counter packets 2977 bytes 263468 jump ufw-before-input
+  > 		counter packets 2988 bytes 264268 jump ufw-before-logging-input
+  > 		counter packets 2988 bytes 264268 jump ufw-before-input
+  < 		counter packets 2926 bytes 340390 jump ufw-before-logging-output
+  < 		counter packets 2926 bytes 340390 jump ufw-before-output
+  > 		counter packets 2937 bytes 341482 jump ufw-before-logging-output
+  > 		counter packets 2937 bytes 341482 jump ufw-before-output
+  > 		tcp dport 2323 reject with tcp reset
+  > 		udp dport 2323 reject
+  > 		tcp dport 2323 reject with tcp reset
+  > 		udp dport 2323 reject
+
+### limit
+$ sudo ufw limit 2222/tcp
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 2997 bytes 264808 jump ufw-before-logging-input
+  < 		counter packets 2997 bytes 264808 jump ufw-before-input
+  > 		counter packets 3008 bytes 265608 jump ufw-before-logging-input
+  > 		counter packets 3008 bytes 265608 jump ufw-before-input
+  < 		counter packets 2946 bytes 343082 jump ufw-before-logging-output
+  < 		counter packets 2946 bytes 343082 jump ufw-before-output
+  > 		counter packets 2957 bytes 344174 jump ufw-before-logging-output
+  > 		counter packets 2957 bytes 344174 jump ufw-before-output
+  > 		tcp dport 2222 ct state new xt match "recent"
+  > 		tcp dport 2222 ct state new xt match "recent" jump ufw-user-limit
+  > 		tcp dport 2222 jump ufw-user-limit-accept
+  > 		tcp dport 2222 ct state new xt match "recent"
+  > 		tcp dport 2222 ct state new xt match "recent" jump ufw6-user-limit
+  > 		tcp dport 2222 jump ufw6-user-limit-accept
+
+### interface
+$ sudo ufw allow in on enp0s2 to any port 8080
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3017 bytes 266148 jump ufw-before-logging-input
+  < 		counter packets 3017 bytes 266148 jump ufw-before-input
+  > 		counter packets 3032 bytes 267288 jump ufw-before-logging-input
+  > 		counter packets 3032 bytes 267288 jump ufw-before-input
+  < 		counter packets 2966 bytes 346006 jump ufw-before-logging-output
+  < 		counter packets 2966 bytes 346006 jump ufw-before-output
+  > 		counter packets 2981 bytes 347438 jump ufw-before-logging-output
+  > 		counter packets 2981 bytes 347438 jump ufw-before-output
+  > 		iifname "enp0s2" tcp dport 8080 accept
+  > 		iifname "enp0s2" udp dport 8080 accept
+  > 		iifname "enp0s2" tcp dport 8080 accept
+  > 		iifname "enp0s2" udp dport 8080 accept
+
+### comment
+$ sudo ufw allow 9000/tcp comment probe comment
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule added
+  > Rule added (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3041 bytes 267828 jump ufw-before-logging-input
+  < 		counter packets 3041 bytes 267828 jump ufw-before-input
+  > 		counter packets 3052 bytes 268628 jump ufw-before-logging-input
+  > 		counter packets 3052 bytes 268628 jump ufw-before-input
+  < 		counter packets 2990 bytes 349102 jump ufw-before-logging-output
+  < 		counter packets 2990 bytes 349102 jump ufw-before-output
+  > 		counter packets 3001 bytes 350194 jump ufw-before-logging-output
+  > 		counter packets 3001 bytes 350194 jump ufw-before-output
+  > 		tcp dport 9000 accept
+  > 		tcp dport 9000 accept
+
+### duplicate rule
+$ sudo ufw allow 80,443/tcp
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Skipping adding existing rule
+  > Skipping adding existing rule (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3061 bytes 269168 jump ufw-before-logging-input
+  < 		counter packets 3061 bytes 269168 jump ufw-before-input
+  > 		counter packets 3072 bytes 269968 jump ufw-before-logging-input
+  > 		counter packets 3072 bytes 269968 jump ufw-before-input
+  < 		counter packets 3010 bytes 351722 jump ufw-before-logging-output
+  < 		counter packets 3010 bytes 351722 jump ufw-before-output
+  > 		counter packets 3021 bytes 352846 jump ufw-before-logging-output
+  > 		counter packets 3021 bytes 352846 jump ufw-before-output
+
+### insert at 1
+$ sudo ufw insert 1 deny from 192.0.2.1
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule inserted
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3081 bytes 270508 jump ufw-before-logging-input
+  < 		counter packets 3081 bytes 270508 jump ufw-before-input
+  > 		counter packets 3092 bytes 271308 jump ufw-before-logging-input
+  > 		counter packets 3092 bytes 271308 jump ufw-before-input
+  < 		counter packets 3030 bytes 354326 jump ufw-before-logging-output
+  < 		counter packets 3030 bytes 354326 jump ufw-before-output
+  > 		counter packets 3041 bytes 355394 jump ufw-before-logging-output
+  > 		counter packets 3041 bytes 355394 jump ufw-before-output
+  > 		ip saddr 192.0.2.1 drop
+
+### delete by rule
+$ sudo ufw delete allow 53
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Rule deleted
+  > Rule deleted (v6)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3101 bytes 271848 jump ufw-before-logging-input
+  < 		counter packets 3101 bytes 271848 jump ufw-before-input
+  > 		counter packets 3116 bytes 272988 jump ufw-before-logging-input
+  > 		counter packets 3116 bytes 272988 jump ufw-before-input
+  < 		counter packets 3050 bytes 356890 jump ufw-before-logging-output
+  < 		counter packets 3050 bytes 356890 jump ufw-before-output
+  > 		counter packets 3065 bytes 358322 jump ufw-before-logging-output
+  > 		counter packets 3065 bytes 358322 jump ufw-before-output
+  < 		tcp dport 53 accept
+  < 		udp dport 53 accept
+  < 		tcp dport 53 accept
+  < 		udp dport 53 accept
+
+### default reject incoming
+$ sudo ufw default reject incoming
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Default incoming policy changed to 'reject'
+  > (be sure to update your rules accordingly)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 1 bytes 132 jump ufw-user-output
+  > 		counter packets 0 bytes 0 jump ufw-user-output
+  > 		counter packets 0 bytes 0 reject
+  < 		counter packets 3125 bytes 273528 jump ufw-before-logging-input
+  < 		counter packets 3125 bytes 273528 jump ufw-before-input
+  < 		counter packets 98 bytes 10399 jump ufw-after-input
+  < 		counter packets 98 bytes 10399 jump ufw-after-logging-input
+  < 		counter packets 98 bytes 10399 jump ufw-reject-input
+  < 		counter packets 98 bytes 10399 jump ufw-track-input
+  > 		counter packets 3140 bytes 274668 jump ufw-before-logging-input
+  > 		counter packets 3140 bytes 274668 jump ufw-before-input
+  > 		counter packets 102 bytes 10739 jump ufw-after-input
+  > 		counter packets 102 bytes 10739 jump ufw-after-logging-input
+  > 		counter packets 102 bytes 10739 jump ufw-reject-input
+  > 		counter packets 102 bytes 10739 jump ufw-track-input
+  < 		counter packets 3074 bytes 359914 jump ufw-before-logging-output
+  < 		counter packets 3074 bytes 359914 jump ufw-before-output
+  < 		counter packets 94 bytes 13187 jump ufw-after-output
+  < 		counter packets 94 bytes 13187 jump ufw-after-logging-output
+  < 		counter packets 94 bytes 13187 jump ufw-reject-output
+  < 		counter packets 94 bytes 13187 jump ufw-track-output
+  > 		counter packets 3089 bytes 361402 jump ufw-before-logging-output
+  > 		counter packets 3089 bytes 361402 jump ufw-before-output
+  > 		counter packets 98 bytes 13527 jump ufw-after-output
+  > 		counter packets 98 bytes 13527 jump ufw-after-logging-output
+  > 		counter packets 98 bytes 13527 jump ufw-reject-output
+  > 		counter packets 98 bytes 13527 jump ufw-track-output
+  < 		counter packets 0 bytes 0 drop
+  > 		counter packets 0 bytes 0 reject
+  > 		counter packets 0 bytes 0 reject
+  < 		counter packets 0 bytes 0 drop
+  > 		counter packets 0 bytes 0 reject
+
+### default deny incoming
+$ sudo ufw default deny incoming
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Default incoming policy changed to 'deny'
+  > (be sure to update your rules accordingly)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 0 bytes 0 reject
+  < 		counter packets 3151 bytes 275288 jump ufw-before-logging-input
+  < 		counter packets 3151 bytes 275288 jump ufw-before-input
+  < 		counter packets 102 bytes 10739 jump ufw-after-input
+  < 		counter packets 102 bytes 10739 jump ufw-after-logging-input
+  < 		counter packets 102 bytes 10739 jump ufw-reject-input
+  < 		counter packets 102 bytes 10739 jump ufw-track-input
+  > 		counter packets 3164 bytes 276222 jump ufw-before-logging-input
+  > 		counter packets 3164 bytes 276222 jump ufw-before-input
+  > 		counter packets 104 bytes 10873 jump ufw-after-input
+  > 		counter packets 104 bytes 10873 jump ufw-after-logging-input
+  > 		counter packets 104 bytes 10873 jump ufw-reject-input
+  > 		counter packets 104 bytes 10873 jump ufw-track-input
+  < 		counter packets 3099 bytes 364278 jump ufw-before-logging-output
+  < 		counter packets 3099 bytes 364278 jump ufw-before-output
+  < 		counter packets 98 bytes 13527 jump ufw-after-output
+  < 		counter packets 98 bytes 13527 jump ufw-after-logging-output
+  < 		counter packets 98 bytes 13527 jump ufw-reject-output
+  < 		counter packets 98 bytes 13527 jump ufw-track-output
+  > 		counter packets 3112 bytes 365560 jump ufw-before-logging-output
+  > 		counter packets 3112 bytes 365560 jump ufw-before-output
+  > 		counter packets 100 bytes 13661 jump ufw-after-output
+  > 		counter packets 100 bytes 13661 jump ufw-after-logging-output
+  > 		counter packets 100 bytes 13661 jump ufw-reject-output
+  > 		counter packets 100 bytes 13661 jump ufw-track-output
+  < 		counter packets 0 bytes 0 reject
+  > 		counter packets 0 bytes 0 drop
+  < 		counter packets 0 bytes 0 reject
+  < 		counter packets 0 bytes 0 reject
+  > 		counter packets 0 bytes 0 drop
+
+### default deny routed
+$ sudo ufw default deny routed
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Default routed policy changed to 'deny'
+  > (be sure to update your rules accordingly)
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3174 bytes 276802 jump ufw-before-logging-input
+  < 		counter packets 3174 bytes 276802 jump ufw-before-input
+  > 		counter packets 3185 bytes 277602 jump ufw-before-logging-input
+  > 		counter packets 3185 bytes 277602 jump ufw-before-input
+  < 		counter packets 3121 bytes 368248 jump ufw-before-logging-output
+  < 		counter packets 3121 bytes 368248 jump ufw-before-output
+  > 		counter packets 3132 bytes 369396 jump ufw-before-logging-output
+  > 		counter packets 3132 bytes 369396 jump ufw-before-output
+
+### logging on
+$ sudo ufw logging on
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+  > Logging enabled
+# Warning: table ip filter is managed by iptables-nft, do not touch!
+# Warning: table ip6 filter is managed by iptables-nft, do not touch!
+kernel rule changes:
+  < 		counter packets 3194 bytes 278142 jump ufw-before-logging-input
+  < 		counter packets 3194 bytes 278142 jump ufw-before-input
+  > 		counter packets 3205 bytes 278942 jump ufw-before-logging-input
+  > 		counter packets 3205 bytes 278942 jump ufw-before-input
+  < 		counter packets 3141 bytes 370860 jump ufw-before-logging-output
+  < 		counter packets 3141 bytes 370860 jump ufw-before-output
+  > 		counter packets 3152 bytes 371936 jump ufw-before-logging-output
+  > 		counter packets 3152 bytes 371936 jump ufw-before-output
+
+## status
+  Status: active
+  
+  To                         Action      From
+  --                         ------      ----
+  Anywhere                   DENY        192.0.2.1                 
+  22/tcp                     ALLOW       Anywhere                  
+  80,443/tcp                 ALLOW       Anywhere                  
+  60000:61000/udp            ALLOW       Anywhere                  
+  5432/tcp                   ALLOW       10.0.0.0/8                
+  2323                       REJECT      Anywhere                  
+  2222/tcp                   LIMIT       Anywhere                  
+  8080 on enp0s2             ALLOW       Anywhere                  
+  9000/tcp                   ALLOW       Anywhere                   # probe comment
+  22/tcp (v6)                ALLOW       Anywhere (v6)             
+  80,443/tcp (v6)            ALLOW       Anywhere (v6)             
+  60000:61000/udp (v6)       ALLOW       Anywhere (v6)             
+  53                         ALLOW       2001:db8::/32             
+  2323 (v6)                  REJECT      Anywhere (v6)             
+  2222/tcp (v6)              LIMIT       Anywhere (v6)             
+  8080 (v6) on enp0s2        ALLOW       Anywhere (v6)             
+  9000/tcp (v6)              ALLOW       Anywhere (v6)              # probe comment
+  
+  25                         DENY OUT    Anywhere                  
+  25 (v6)                    DENY OUT    Anywhere (v6)             
+  
+
+## status numbered
+  Status: active
+  
+       To                         Action      From
+       --                         ------      ----
+  [ 1] Anywhere                   DENY IN     192.0.2.1                 
+  [ 2] 22/tcp                     ALLOW IN    Anywhere                  
+  [ 3] 80,443/tcp                 ALLOW IN    Anywhere                  
+  [ 4] 60000:61000/udp            ALLOW IN    Anywhere                  
+  [ 5] 5432/tcp                   ALLOW IN    10.0.0.0/8                
+  [ 6] 25                         DENY OUT    Anywhere                   (out)
+  [ 7] 2323                       REJECT IN   Anywhere                  
+  [ 8] 2222/tcp                   LIMIT IN    Anywhere                  
+  [ 9] 8080 on enp0s2             ALLOW IN    Anywhere                  
+  [10] 9000/tcp                   ALLOW IN    Anywhere                   # probe comment
+  [11] 22/tcp (v6)                ALLOW IN    Anywhere (v6)             
+  [12] 80,443/tcp (v6)            ALLOW IN    Anywhere (v6)             
+  [13] 60000:61000/udp (v6)       ALLOW IN    Anywhere (v6)             
+  [14] 53                         ALLOW IN    2001:db8::/32             
+  [15] 25 (v6)                    DENY OUT    Anywhere (v6)              (out)
+  [16] 2323 (v6)                  REJECT IN   Anywhere (v6)             
+  [17] 2222/tcp (v6)              LIMIT IN    Anywhere (v6)             
+  [18] 8080 (v6) on enp0s2        ALLOW IN    Anywhere (v6)             
+  [19] 9000/tcp (v6)              ALLOW IN    Anywhere (v6)              # probe comment
+  
+
+## status verbose
+  Status: active
+  Logging: on (low)
+  Default: deny (incoming), allow (outgoing), disabled (routed)
+  New profiles: skip
+  
+  To                         Action      From
+  --                         ------      ----
+  Anywhere                   DENY IN     192.0.2.1                 
+  22/tcp                     ALLOW IN    Anywhere                  
+  80,443/tcp                 ALLOW IN    Anywhere                  
+  60000:61000/udp            ALLOW IN    Anywhere                  
+  5432/tcp                   ALLOW IN    10.0.0.0/8                
+  2323                       REJECT IN   Anywhere                  
+  2222/tcp                   LIMIT IN    Anywhere                  
+  8080 on enp0s2             ALLOW IN    Anywhere                  
+  9000/tcp                   ALLOW IN    Anywhere                   # probe comment
+  22/tcp (v6)                ALLOW IN    Anywhere (v6)             
+  80,443/tcp (v6)            ALLOW IN    Anywhere (v6)             
+  60000:61000/udp (v6)       ALLOW IN    Anywhere (v6)             
+  53                         ALLOW IN    2001:db8::/32             
+  2323 (v6)                  REJECT IN   Anywhere (v6)             
+  2222/tcp (v6)              LIMIT IN    Anywhere (v6)             
+  8080 (v6) on enp0s2        ALLOW IN    Anywhere (v6)             
+  9000/tcp (v6)              ALLOW IN    Anywhere (v6)              # probe comment
+  
+  25                         DENY OUT    Anywhere                  
+  25 (v6)                    DENY OUT    Anywhere (v6)             
+  
+
+## Errors
+$ ufw allow 70000
+  > ERROR: Bad port
+$ ufw allow foo
+  > ERROR: Could not find a profile matching 'foo'
+$ ufw limit out 22
+  > Rule added
+  > Rule added (v6)
+$ ufw delete 99
+  > ERROR: Could not find rule '99'
+$ ufw allow from 10.0.0.1 to ::1
+  > ERROR: Mixed IP versions for 'from' and 'to'
+$ ufw default maybe
+  > ERROR: Invalid syntax
+  > 
+  > Usage: ufw COMMAND
+  > 
+  > Commands:
+  >  enable                          enables the firewall
+  >  disable                         disables the firewall
+  >  default ARG                     set default policy
+  >  logging LEVEL                   set logging to LEVEL
+  >  allow ARGS                      add allow rule
+  >  deny ARGS                       add deny rule
+  >  reject ARGS                     add reject rule
+  >  limit ARGS                      add limit rule
+  >  delete RULE|NUM                 delete RULE
+  >  insert NUM RULE                 insert RULE at NUM
+  >  prepend RULE                    prepend RULE
+  >  route RULE                      add route RULE
+  >  route delete RULE|NUM           delete route RULE
+  >  route insert NUM RULE           insert route RULE at NUM
+  >  reload                          reload firewall
+  >  reset                           reset firewall
+  >  status                          show firewall status
+  >  status numbered                 show firewall status as numbered list of RULES
+  >  status verbose                  show verbose firewall status
+  >  show ARG                        show firewall report
+  >  version                         display version information
+  > 
+  > Application profile commands:
+  >  app list                        list application profiles
+  >  app info PROFILE                show information on PROFILE
+  >  app update PROFILE              update PROFILE
+  >  app default ARG                 set default application policy
+  > 
+
+## Connection behaviour (client namespace 10.200.0.2 -> 10.200.0.1)
+reject 2323/tcp (server listening): REFUSED
+reject 2323/udp (server listening): REFUSED
+unlisted 8081 (default deny): TIMEOUT
+limit 2222/tcp, 12 quick connections:
+       1	OPEN
+       2	OPEN
+       3	OPEN
+       4	OPEN
+       5	OPEN
+       6	REFUSED
+       7	REFUSED
+       8	REFUSED
+       9	REFUSED
+      10	REFUSED
+      11	TIMEOUT
+      12	TIMEOUT
+recovery: wait quietly, then one probe (each probe may itself count as an attempt):
+  after 10s quiet: REFUSED
+  after 20s quiet: REFUSED
+  after 30s quiet: REFUSED
+  after 35s quiet: REFUSED
+does a blocked client that keeps retrying stay blocked? (probe every 3 s for 45 s)
+       10 REFUSED
+        5 TIMEOUT
+connections allowed when spaced 7 s apart (6 tries, after 40 s quiet):
+       1	REFUSED
+       2	REFUSED
+       3	REFUSED
+       4	REFUSED
+       5	TIMEOUT
+       6	REFUSED
+
+## After disable
+tables: table ip filter table ip6 filter 
+rules left in ufw chains: 72

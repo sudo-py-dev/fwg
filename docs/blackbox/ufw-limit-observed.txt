@@ -1,0 +1,24 @@
+## Kernel rules for the limit (iptables-save view, IPv4)
+  :ufw-user-limit - [0:0]
+  :ufw-user-limit-accept - [0:0]
+  -A ufw-user-input -p tcp -m tcp --dport 2222 -m conntrack --ctstate NEW -m recent --set --name DEFAULT --mask 255.255.255.255 --rsource
+  -A ufw-user-input -p tcp -m tcp --dport 2222 -m conntrack --ctstate NEW -m recent --update --seconds 30 --hitcount 6 --name DEFAULT --mask 255.255.255.255 --rsource -j ufw-user-limit
+  -A ufw-user-input -p tcp -m tcp --dport 2222 -j ufw-user-limit-accept
+  -A ufw-user-limit -m limit --limit 3/min -j LOG --log-prefix "[UFW LIMIT BLOCK] "
+  -A ufw-user-limit -j REJECT --reject-with icmp-port-unreachable
+  -A ufw-user-limit-accept -j ACCEPT
+
+## Burst of 8
+OPEN OPEN OPEN OPEN OPEN REFUSED REFUSED REFUSED 
+server alive (loopback): OPEN
+xt_recent state:
+  /proc/net/xt_recent/DEFAULT: src=10.200.0.2 ttl: 64 last_seen: 4295482295 oldest_pkt: 11 4295482294, 4295482294, 4295482294, 4295482295, 4295482295, 4295482295, 4295482295, 4295482295, 4295482295, 4295482295, 4295482295 
+
+## After 15s more quiet: REFUSED  (server alive: OPEN)
+  /proc/net/xt_recent/DEFAULT: src=10.200.0.2 ttl: 64 last_seen: 4295497384 oldest_pkt: 9 4295493398, 4295494442, 4295494442, 4295495486, 4295495486, 4295496532, 4295496532, 4295497384, 4295497384, 4295482295, 4295482295, 429548292
+
+## After 31s more quiet: REFUSED  (server alive: OPEN)
+  /proc/net/xt_recent/DEFAULT: src=10.200.0.2 ttl: 64 last_seen: 4295528476 oldest_pkt: 7 4295525845, 4295526890, 4295526890, 4295527936, 4295527936, 4295528476, 4295528476, 4295513284, 4295513284, 4295514332, 4295514332, 429551537
+
+## After 45s more quiet: REFUSED  (server alive: OPEN)
+  /proc/net/xt_recent/DEFAULT: src=10.200.0.2 ttl: 64 last_seen: 4295573568 oldest_pkt: 31 4295558304, 4295559350, 4295559350, 4295560397, 4295560397, 4295561445, 4295561445, 4295562490, 4295562490, 4295563537, 4295563537, 42955645
