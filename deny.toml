@@ -13,11 +13,20 @@ unmaintained = "workspace"
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
     "MIT",
     "Unicode-3.0",
     "Unlicense",
 ]
 confidence-threshold = 0.9
+
+# cfg_block (used by turso_core) ships only an Apache-2.0 notice as LICENSE, which is
+# too short to detect. Pinned to the file's hash: a changed licence fails the check.
+[[licenses.clarify]]
+crate = "cfg_block"
+expression = "Apache-2.0"
+license-files = [{ path = "LICENSE", hash = 0x0fb72a18 }]
 
 [bans]
 multiple-versions = "warn"

@@ -170,6 +170,14 @@ No crate is added without a line in this table.
 - ⚠️ Cost: 234 crates and ~4 min for a debug build. Acceptable because **only the daemon
   (`fwgd`) links it**; the `fwg` CLI asks the daemon over the socket and stays small.
 - Turso declares no `rust-version`; the CI MSRV job is the check.
+- Licences it adds beyond MIT/Apache: BSD-3-Clause (`subtle`, `sha1_smol`, `bindgen`) and
+  ISC (`libloading`), both permissive and now allowed in `deny.toml`; `cfg_block` ships only
+  an Apache-2.0 notice, declared with a `clarify` entry pinned to the file's hash.
+- `bindgen` is a build-dependency of `turso_sdk_kit`, but its build script exits at once on
+  non-Windows targets: on Linux no libclang or C compiler is needed (checked in `build.rs`).
+- Verified on 0.8.3 before use: tuples as parameters, `IF NOT EXISTS` indexes, upsert
+  (`ON CONFLICT … DO UPDATE`), row counts from `UPDATE`/`DELETE`, `BEGIN`/`ROLLBACK`, and
+  that `Database`, `Connection` and their futures are `Send + Sync`.
 - `forbid(unsafe_code)` covers *our* crates only; dependencies (including Turso) contain
   `unsafe` internally. That is audited with `cargo-deny` (advisories) and reviewed on
   upgrades.
@@ -316,7 +324,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | 2a ✅ | Ban table in the kernel: `inet fwg_ban`, sets `ban4`/`ban6` (`flags timeout`, `size 262144`), chain `input` at `priority filter - 10` dropping `@ban4`/`@ban6`. Ban = add-delete-add of the element in one batch (replaces any earlier timeout), unban = add-delete (never fails on a missing address). Ban time 1 s to 365 days. Re-creating the table keeps existing bans; `fwg reload`/`disable` never touch it. | `fwg-nft` |
 | 2b ✅ | Filters (TOML: `description`, `programs`, `failures`, `ignore`; patterns must be anchored `^…$` and have exactly one `<HOST>`), jails (`log`, `max_retry` 5, `find_time` 10m, `ban_time` 1h, optional doubling up to `ban_time_max` 1w, `ignore`), sliding-window tracker (bounded, evicts the oldest tenth when full), `Watcher` tying them together. Pure logic. Clean-room `filters/sshd.toml` from OpenSSH message formats — **to verify against real sshd output in the VM (2f)**. | `fwg-watch` |
 | 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
-| 2d | `Store` trait with a Turso implementation and an in-memory one for tests: ban history (for increasing ban times) and active bans (restored after reboot). | `fwg-store` |
+| 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. | `fwg-store` |
 | 2e | `fwgd`: wiring, control socket, systemd unit, restore active bans at start. | `fwgd` |
 | 2f | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`. VM test: a real SSH brute force from the host gets banned. | `fwg` |
 
