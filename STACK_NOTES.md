@@ -175,9 +175,24 @@ No crate is added without a line in this table.
   upgrades.
 
 ### journald
-Read with `journalctl -f -o json --cursor-file …` as a child process (argument array)
-instead of the `systemd` crate's C bindings — keeps us free of FFI `unsafe`.
-The event time is journald's `__REALTIME_TIMESTAMP`, so no date parsing is needed.
+Read with `journalctl --follow --output=json --lines=0 [--after-cursor=C] _COMM=p …` as a
+child process (argument array) instead of the `systemd` crate's C bindings — keeps us free
+of FFI `unsafe`. Verified on systemd 255:
+- `--lines=0` starts at the end; `--after-cursor` resumes exactly after an entry, including
+  entries logged while fwg was stopped (the two flags combine correctly).
+- Each entry has `__CURSOR`, so **the daemon stores the last cursor itself** instead of
+  `--cursor-file`, which journalctl writes only on a clean exit (std can only SIGKILL).
+- Messages that are not valid UTF-8 arrive as a JSON array of bytes; handled.
+- **Matching uses the trusted `_COMM` field** (the real process name, set by journald), not
+  `SYSLOG_IDENTIFIER`/`-t`, which any local user can set. Verified: `logger -t sshd` has
+  `_COMM=logger` and is not matched. Tested in `crates/fwg-watch/tests/journal.rs`.
+- The event time is journald's `__REALTIME_TIMESTAMP`, so no date parsing is needed.
+- The reader blocks on a thread; dropping its `JournalHandle` kills journalctl, which ends
+  the blocked read cleanly.
+
+**Log files cannot be trusted the same way.** Anything a local user sends to syslog with
+`logger -t sshd` lands in `auth.log` looking exactly like sshd. Jails should use
+`log = "journal"` (the default); a file source trusts every local user not to forge lines.
 
 ## 6. Testing environment (verified on this machine)
 
@@ -300,7 +315,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 |---|---|---|
 | 2a ✅ | Ban table in the kernel: `inet fwg_ban`, sets `ban4`/`ban6` (`flags timeout`, `size 262144`), chain `input` at `priority filter - 10` dropping `@ban4`/`@ban6`. Ban = add-delete-add of the element in one batch (replaces any earlier timeout), unban = add-delete (never fails on a missing address). Ban time 1 s to 365 days. Re-creating the table keeps existing bans; `fwg reload`/`disable` never touch it. | `fwg-nft` |
 | 2b ✅ | Filters (TOML: `description`, `programs`, `failures`, `ignore`; patterns must be anchored `^…$` and have exactly one `<HOST>`), jails (`log`, `max_retry` 5, `find_time` 10m, `ban_time` 1h, optional doubling up to `ban_time_max` 1w, `ignore`), sliding-window tracker (bounded, evicts the oldest tenth when full), `Watcher` tying them together. Pure logic. Clean-room `filters/sshd.toml` from OpenSSH message formats — **to verify against real sshd output in the VM (2f)**. | `fwg-watch` |
-| 2c | Log sources: file tailer (handles rotation and truncation) and journald reader. | `fwg-watch` |
+| 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
 | 2d | `Store` trait with a Turso implementation and an in-memory one for tests: ban history (for increasing ban times) and active bans (restored after reboot). | `fwg-store` |
 | 2e | `fwgd`: wiring, control socket, systemd unit, restore active bans at start. | `fwgd` |
 | 2f | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`. VM test: a real SSH brute force from the host gets banned. | `fwg` |

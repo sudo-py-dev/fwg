@@ -335,6 +335,8 @@ dependencies = [
  "proptest",
  "regex",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "toml",
 ]
