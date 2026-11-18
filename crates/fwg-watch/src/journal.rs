@@ -1,0 +1,259 @@
+//! Reading the systemd journal through `journalctl --follow --output=json`.
+//!
+//! Entries are matched on the **trusted** `_COMM` field (the real process name,
+//! recorded by journald), not on `SYSLOG_IDENTIFIER`, which any local user can set:
+//! `logger -t sshd "Invalid user x from <victim> port 22"` must not ban `<victim>`.
+//!
+//! Running `journalctl` as a child process keeps fwg free of the C bindings to
+//! libsystemd (and of `unsafe`).
+
+use std::ffi::OsString;
+use std::io::{self, BufRead, BufReader, Read};
+use std::path::Path;
+use std::process::{Child, ChildStdout, Command, Stdio};
+use std::time::Duration;
+
+use serde::Deserialize;
+
+/// Where `journalctl` is looked for (fixed paths only: the daemon runs as root).
+pub const JOURNALCTL_PATHS: &[&str] = &["/usr/bin/journalctl", "/bin/journalctl"];
+/// JSON entries longer than this are skipped.
+const MAX_ENTRY_BYTES: u64 = 64 * 1024;
+
+/// One log message, from a file or the journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEvent {
+    /// The process that logged it (`_COMM` for the journal, the syslog tag for files).
+    pub program: String,
+    /// The message text.
+    pub message: String,
+    /// When it was logged, since the Unix epoch.
+    pub at: Duration,
+    /// Journal position, to resume after a restart (`None` for files).
+    pub cursor: Option<String>,
+}
+
+/// Arguments for `journalctl`: follow new entries from `programs` as JSON,
+/// starting after `after_cursor` if given, else at the end of the journal.
+#[must_use]
+pub fn journalctl_args(programs: &[&str], after_cursor: Option<&str>) -> Vec<OsString> {
+    let mut args: Vec<OsString> = [
+        "--follow",
+        "--output=json",
+        "--lines=0",
+        "--no-pager",
+        "--quiet",
+    ]
+    .map(OsString::from)
+    .into();
+    if let Some(cursor) = after_cursor {
+        args.push(format!("--after-cursor={cursor}").into());
+    }
+    // Several matches on the same field are OR-ed by journalctl.
+    args.extend(
+        programs
+            .iter()
+            .map(|p| OsString::from(format!("_COMM={p}"))),
+    );
+    args
+}
+
+/// Parses one line of `journalctl --output=json`; `None` if a needed field is missing.
+#[must_use]
+pub fn parse_journal_entry(json: &[u8]) -> Option<LogEvent> {
+    #[derive(Deserialize)]
+    struct Entry {
+        #[serde(rename = "MESSAGE")]
+        message: Message,
+        #[serde(rename = "_COMM")]
+        comm: String,
+        #[serde(rename = "__REALTIME_TIMESTAMP")]
+        realtime_us: String,
+        #[serde(rename = "__CURSOR")]
+        cursor: Option<String>,
+    }
+    /// journald sends messages that are not valid UTF-8 as an array of bytes.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Message {
+        Text(String),
+        Bytes(Vec<u8>),
+    }
+    let entry: Entry = serde_json::from_slice(json).ok()?;
+    let message = match entry.message {
+        Message::Text(s) => s,
+        Message::Bytes(b) => String::from_utf8_lossy(&b).into_owned(),
+    };
+    Some(LogEvent {
+        program: entry.comm,
+        message,
+        at: Duration::from_micros(entry.realtime_us.parse().ok()?),
+        cursor: entry.cursor,
+    })
+}
+
+/// Owns a running `journalctl --follow`; dropping it kills the process, which makes
+/// the matching [`JournalReader`] return `None`. This is how a reader blocked on
+/// another thread is stopped.
+#[derive(Debug)]
+pub struct JournalHandle {
+    child: Child,
+}
+
+impl Drop for JournalHandle {
+    fn drop(&mut self) {
+        // Already exited is fine; nothing else useful can be done with an error here.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Reads entries from a `journalctl --follow` started by [`JournalReader::spawn`].
+#[derive(Debug)]
+pub struct JournalReader {
+    out: BufReader<ChildStdout>,
+}
+
+impl JournalReader {
+    /// Starts following entries from `programs`.
+    ///
+    /// Keep the returned handle alive for as long as the reader is used.
+    ///
+    /// # Errors
+    /// [`io::ErrorKind::NotFound`] if `journalctl` is not installed, or spawn errors.
+    pub fn spawn(
+        programs: &[&str],
+        after_cursor: Option<&str>,
+    ) -> io::Result<(JournalHandle, Self)> {
+        let program = JOURNALCTL_PATHS
+            .iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "journalctl not found"))?;
+        let mut child = Command::new(program)
+            .args(journalctl_args(programs, after_cursor))
+            .env_clear()
+            .env("LC_ALL", "C")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            // journalctl's own errors go to the daemon's log.
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::other("journalctl stdout missing"));
+        };
+        Ok((
+            JournalHandle { child },
+            Self {
+                out: BufReader::new(stdout),
+            },
+        ))
+    }
+
+    /// Blocks until the next entry; `None` when `journalctl` exited.
+    ///
+    /// # Errors
+    /// I/O errors reading from `journalctl`.
+    pub fn next_event(&mut self) -> io::Result<Option<LogEvent>> {
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let read = (&mut self.out)
+                .take(MAX_ENTRY_BYTES + 1)
+                .read_until(b'\n', &mut line)?;
+            if read == 0 {
+                return Ok(None);
+            }
+            if line.last() != Some(&b'\n') {
+                if line.len() as u64 > MAX_ENTRY_BYTES {
+                    skip_rest_of_line(&mut self.out)?;
+                    continue;
+                }
+                // EOF in the middle of a line: journalctl exited.
+                return Ok(None);
+            }
+            if let Some(event) = parse_journal_entry(&line) {
+                return Ok(Some(event));
+            }
+        }
+    }
+}
+
+fn skip_rest_of_line(reader: &mut impl BufRead) -> io::Result<()> {
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            reader.consume(pos + 1);
+            return Ok(());
+        }
+        let len = buf.len();
+        reader.consume(len);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_arguments() {
+        let args = journalctl_args(&["sshd", "sshd-session"], Some("s=abc;i=1"));
+        let args: Vec<_> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "--follow",
+                "--output=json",
+                "--lines=0",
+                "--no-pager",
+                "--quiet",
+                "--after-cursor=s=abc;i=1",
+                "_COMM=sshd",
+                "_COMM=sshd-session",
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_text_and_byte_messages() {
+        let text = br#"{"MESSAGE":"Invalid user x from 192.0.2.1 port 22","_COMM":"sshd-session","SYSLOG_IDENTIFIER":"spoofable","__REALTIME_TIMESTAMP":"1795041002995153","__CURSOR":"s=1;i=2"}"#;
+        assert_eq!(
+            parse_journal_entry(text),
+            Some(LogEvent {
+                program: "sshd-session".into(),
+                message: "Invalid user x from 192.0.2.1 port 22".into(),
+                at: Duration::from_micros(1_795_041_002_995_153),
+                cursor: Some("s=1;i=2".into()),
+            })
+        );
+        let bytes =
+            br#"{"MESSAGE":[98,97,100,32,255],"_COMM":"logger","__REALTIME_TIMESTAMP":"1"}"#;
+        assert_eq!(parse_journal_entry(bytes).unwrap().message, "bad \u{fffd}");
+    }
+
+    #[test]
+    fn rejects_incomplete_entries() {
+        for json in [
+            &br#"{"MESSAGE":"x","__REALTIME_TIMESTAMP":"1"}"#[..],
+            br#"{"_COMM":"sshd","__REALTIME_TIMESTAMP":"1"}"#,
+            br#"{"MESSAGE":"x","_COMM":"sshd","__REALTIME_TIMESTAMP":"soon"}"#,
+            b"not json",
+        ] {
+            assert_eq!(parse_journal_entry(json), None);
+        }
+    }
+
+    #[test]
+    fn skips_rest_of_long_lines() {
+        let mut data = io::Cursor::new(b"aaaaaaa\nnext\n".to_vec());
+        skip_rest_of_line(&mut data).unwrap();
+        let mut rest = String::new();
+        data.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "next\n");
+    }
+}
