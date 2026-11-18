@@ -3,7 +3,7 @@
 //! Addresses are from the documentation ranges (RFC 5737, RFC 3849).
 
 // Test helpers should fail loudly, like the tests themselves.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::net::IpAddr;
 
@@ -129,4 +129,24 @@ fn programs() {
     let f = sshd();
     assert!(f.handles_program("sshd") && f.handles_program("sshd-session"));
     assert!(!f.handles_program("sudo"));
+}
+
+#[test]
+fn shipped_jail_uses_the_journal_and_the_defaults() {
+    let jails =
+        fwg_watch::Jail::parse_file(include_str!("../../../dist/jails.d/sshd.toml")).unwrap();
+    let [jail] = jails.as_slice() else {
+        panic!("expected one jail, got {}", jails.len())
+    };
+    assert_eq!(jail.name(), "sshd");
+    assert_eq!(jail.filter(), "sshd");
+    assert_eq!(jail.log(), &fwg_watch::LogSource::Journal);
+    assert_eq!(jail.max_retry(), 5);
+    assert_eq!(jail.find_time().as_secs(), 600);
+    assert_eq!(jail.ban_time_for(0).as_secs(), 3600);
+    assert_eq!(
+        jail.ban_time_for(3).as_secs(),
+        3600,
+        "no increment by default"
+    );
 }

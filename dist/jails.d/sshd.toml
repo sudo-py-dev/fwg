@@ -1,0 +1,23 @@
+# Ban addresses that keep failing to log in over SSH.
+# Install as /etc/fwg/jails.d/sshd.toml; fwgd reads every *.toml file there.
+# The filter is /usr/share/fwg/filters/sshd.toml (override it in /etc/fwg/filters/).
+
+[sshd]
+# The journal, matched on the real process name (sshd, sshd-session), which local
+# users cannot fake. A log file such as /var/log/auth.log also works, but anyone
+# can write lines that look like sshd's into it with `logger -t sshd`.
+log = "journal"
+
+# 5 failures within 10 minutes ban the address for 1 hour. One failed connection
+# usually logs 1-3 failures (e.g. "Failed password" and then "Connection closed").
+max_retry = 5
+find_time = "10m"
+ban_time = "1h"
+
+# Ban repeat offenders longer: each earlier ban in the last 30 days doubles it.
+# ban_time_increment = true
+# ban_time_max = "1w"
+
+# Addresses and networks never banned (loopback never is). Add your own
+# management network here so a mistyped password cannot lock you out.
+# ignore = ["192.0.2.0/24", "2001:db8::/32"]
