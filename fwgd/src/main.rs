@@ -10,11 +10,12 @@ mod config;
 mod engine;
 mod socket;
 mod sources;
+mod test_filter;
 
 use std::fs::DirBuilder;
 use std::io::{IsTerminal, Write};
 use std::os::unix::fs::DirBuilderExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,6 +66,14 @@ struct Args {
     /// Check the configuration and exit.
     #[arg(long)]
     check: bool,
+    /// Run a filter (a name, or the path of a filter file) over LOG and report
+    /// what it would count, then exit. Nothing is banned.
+    #[arg(long, value_name = "FILTER", conflicts_with = "check")]
+    test_filter: Option<String>,
+    /// The log for --test-filter: a file, or `-` for standard input. Syslog lines
+    /// and bare messages (`journalctl -o cat`) both work.
+    #[arg(value_name = "LOG", requires = "test_filter", default_value = "-")]
+    log: PathBuf,
     /// Log debug messages too.
     #[arg(short, long)]
     verbose: bool,
@@ -100,6 +109,9 @@ fn run(args: Args) -> Result<()> {
         state_dir: args.state_dir,
         socket: args.socket,
     };
+    if let Some(filter) = &args.test_filter {
+        return test_filter(&paths.filter_dirs, filter, &args.log, args.verbose);
+    }
     let watchers = load_watchers(&paths)?;
     if args.check {
         let names: Vec<&str> = watchers.iter().map(|w| w.jail().name()).collect();
@@ -115,6 +127,21 @@ fn run(args: Args) -> Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(daemon(paths, watchers))
+}
+
+fn test_filter(dirs: &[PathBuf], filter: &str, log: &Path, verbose: bool) -> Result<()> {
+    let (source, filter) = config::find_filter(dirs, filter)?;
+    let report = if log == Path::new("-") {
+        test_filter::check(&filter, std::io::stdin().lock())
+    } else {
+        let file =
+            std::fs::File::open(log).with_context(|| format!("cannot open {}", log.display()))?;
+        test_filter::check(&filter, std::io::BufReader::new(file))
+    }
+    .with_context(|| format!("cannot read {}", log.display()))?;
+    let text = test_filter::render(&filter, &source.display().to_string(), &report, verbose);
+    std::io::stdout().write_all(text.as_bytes())?;
+    Ok(())
 }
 
 async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
