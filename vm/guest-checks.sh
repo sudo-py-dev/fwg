@@ -236,8 +236,14 @@ case "${1:-}" in
     export DEBIAN_FRONTEND=noninteractive
     echo "postfix postfix/main_mailer_type select Internet Site" | sudo debconf-set-selections
     echo "postfix postfix/mailname string fwg-test.example" | sudo debconf-set-selections
-    sudo apt-get -o DPkg::Lock::Timeout=300 install -y -q nginx apache2-utils dovecot-imapd \
-      dovecot-pop3d postfix >/tmp/apt.log 2>&1 || { tail -5 /tmp/apt.log; exit 1; }
+    # The package index from first boot goes stale (mirrors drop old versions), and
+    # downloads sometimes fail: refresh it, and try twice.
+    for try in 1 2; do
+      sudo apt-get -o DPkg::Lock::Timeout=300 update -q >/tmp/apt.log 2>&1
+      sudo apt-get -o DPkg::Lock::Timeout=300 install -y -q nginx apache2-utils dovecot-imapd \
+        dovecot-pop3d postfix >>/tmp/apt.log 2>&1 && break
+      (( try == 2 )) && { tail -5 /tmp/apt.log; exit 1; }
+    done
     sudo htpasswd -bc /etc/nginx/.htpasswd alice right-password >/dev/null 2>&1
     echo 'server { listen 80 default_server; location / { auth_basic "test"; auth_basic_user_file /etc/nginx/.htpasswd; root /var/www/html; } }' \
       | sudo tee /etc/nginx/sites-enabled/default >/dev/null
