@@ -207,6 +207,10 @@ case "${1:-}" in
     check "fwg ban IPv6 by hand" contains "$(sudo fwg ban 2001:db8::50 --time 2h)" "banned 2001:db8::50 for 2h"
     check "manual ban listed as manual" listed 192.0.2.50 manual
     check "no fwgd errors" bash -c '! sudo journalctl -u fwgd.service -p err --no-pager -q | grep -q .'
+    report="$(sudo journalctl _COMM=sshd _COMM=sshd-session -o cat --no-pager | /usr/sbin/fwgd --test-filter sshd)"
+    check "fwgd --test-filter counts the real journal's failures" \
+      bash -c "grep -qE '^  failures: +[1-9][0-9]*  from [1-9]' <<<\"\$1\"" _ "$report"
+    check "fwgd --test-filter names the attacker" contains "$report" "10.200.0.2 "
     ;;
   confirm-keep)
     check "--confirm change" contains "$(sudo fwg --confirm 5 allow 8080/tcp)" "Run \`fwg confirm\` within 5 s"
