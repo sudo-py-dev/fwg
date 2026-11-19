@@ -153,6 +153,7 @@ Exact JSON for every construct above was captured from real nft output on this m
 | Logging | `tracing`, `tracing-subscriber` | 0.1.44 / 0.3.23 | MIT | 2 |
 | Regex | `regex` | 1.13.2 | MIT/Apache | 2 — **linear time, ReDoS-safe** on attacker-controlled log lines |
 | Database | `rusqlite` with bundled SQLite (Turso returns at its 1.0, see below) | 0.41.1 | MIT | 2 |
+| Fuzzing (isolated test workspace) | `libfuzzer-sys` | 0.4.10 | MIT/Apache; bundled LLVM libFuzzer under NCSA | Post-Phase 3 |
 | Tests | `insta` (snapshots), `proptest`, `assert_cmd` | 1.49.0 / 1.12.0 / 2.2.2 | Apache / MIT/Apache | 1 |
 
 No crate is added without a line in this table.
@@ -229,8 +230,8 @@ inside the test VMs).
 
 Optional local dev tools (`cargo install`): `cargo-nextest`, `cargo-insta` (reviewing
 snapshots; `INSTA_UPDATE=always cargo test` works without it), `cargo-deny` (CI runs it),
-`cargo-llvm-cov`. `cargo-fuzz` also needs a nightly toolchain — only for fuzzing the log
-parsers, Phase 2.
+`cargo-llvm-cov`. The [parser fuzz targets](fuzz/README.md) run with `cargo-fuzz`
+and nightly Rust in a separate test workspace.
 
 **Safety rule:** never run `sudo fwg enable` on the dev machine. Real-root testing happens
 in the VM (tier 4) or CI only.
