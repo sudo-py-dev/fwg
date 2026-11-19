@@ -366,8 +366,13 @@ impl<B: Backend> App<B> {
         Ok(())
     }
 
+    /// The configuration directory.
+    pub(crate) fn config_path(&self) -> &std::path::Path {
+        self.config.path()
+    }
+
     /// Applies `edit` to the rules, then loads and saves the result if it changed.
-    fn change(
+    pub(crate) fn change(
         &self,
         out: &mut dyn Write,
         edit: impl FnOnce(&mut RuleSet) -> Result<String>,
@@ -472,7 +477,7 @@ impl<B: Backend> App<B> {
 }
 
 /// A rule with the profile it came from, e.g. `allow 22/tcp (OpenSSH)`.
-fn labelled(rule: &Rule) -> String {
+pub(crate) fn labelled(rule: &Rule) -> String {
     match rule.app() {
         Some(app) => format!("{rule} ({app})"),
         None => rule.to_string(),

@@ -325,6 +325,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fwg-core",
+ "fwg-import",
  "fwg-ipc",
  "fwg-nft",
  "fwg-watch",
