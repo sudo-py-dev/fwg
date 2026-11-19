@@ -64,6 +64,10 @@ sudo fwgd --check                     # validate jails and filters without start
 sudo journalctl _COMM=sshd _COMM=sshd-session -o cat | fwgd --test-filter sshd   # what a filter counts
 ```
 
+Shipped filters: `sshd`, `dovecot` (IMAP/POP3), `postfix-sasl` (SMTP AUTH) and
+`nginx-http-auth` (basic auth, from `access.log`). `dist/jails.d/` has a jail for each;
+only `sshd` is enabled, the others say `enabled = false` until you change it.
+
 Add your own management network to a jail's `ignore` list so a mistyped password
 cannot lock you out.
 
@@ -75,11 +79,12 @@ Requires Rust 1.89+ and the `nftables` package.
 cargo build --release
 sudo install -m 0755 target/release/fwg target/release/fwgd /usr/sbin/
 sudo install -m 0644 dist/fwg.service dist/fwgd.service /etc/systemd/system/
-sudo install -D -m 0644 filters/sshd.toml /usr/share/fwg/filters/sshd.toml
+sudo install -d -m 0755 /usr/share/fwg/filters
+sudo install -m 0644 filters/*.toml /usr/share/fwg/filters/
 sudo install -d -m 0755 /usr/share/fwg/apps
 sudo install -m 0644 apps/*.toml /usr/share/fwg/apps/
 sudo install -d -m 0750 /etc/fwg /etc/fwg/jails.d
-sudo install -m 0644 dist/jails.d/sshd.toml /etc/fwg/jails.d/sshd.toml
+sudo install -m 0644 dist/jails.d/*.toml /etc/fwg/jails.d/
 sudo systemctl daemon-reload
 sudo systemctl enable fwg.service     # loads the rules at boot
 sudo systemctl enable --now fwgd.service

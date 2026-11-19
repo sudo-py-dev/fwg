@@ -455,7 +455,7 @@ they switch, in PR-sized steps:
 |---|---|---|
 | 3a ✅ | `fwgd --test-filter FILTER [LOG]`: runs a filter (name or file) over a log or stdin and reports failures per pattern and per address, ignored lines, lines from other programs, and the lines that matched nothing. Nothing is banned. | `fail2ban-regex`: the way filters are written and checked. Every new filter in 3c is checked with it. |
 | 3b ✅ | App profiles: `fwg app list`, `fwg app info NAME`, `fwg allow OpenSSH` and ufw's `… to any app NAME`, also for `insert`/`delete`. Profiles are TOML tables (`title`, `description`, `ports = ["80,443/tcp", "443/udp"]`) in `/usr/share/fwg/apps/` (shipped, from `apps/`) and `/etc/fwg/apps/` (local; the first of a name wins, any case). A rule is expanded when added — one rule per port entry — and keeps the profile name as a label shown by `status` (`80,443/tcp (Nginx Full)`); like ufw, editing a profile later does not change existing rules. Profiles are only read when a rule names one (a name never starts with a digit, ports always do), so an unreadable profile directory cannot break `fwg allow 22`. `delete allow 22/tcp` also finds a labelled rule. | `ufw allow OpenSSH`, `ufw app list`. |
-| 3c | More shipped filters, each verified against the real program's output in the VMs, like sshd (§9.1): nginx HTTP basic auth, Postfix SMTP AUTH, Dovecot IMAP/POP3 logins. | fail2ban's most used jails after sshd. |
+| 3c ✅ | Filters `dovecot`, `postfix-sasl` and `nginx-http-auth`, written from real output of each program in both VMs and tested against it (`crates/fwg-watch/tests/service_filters.rs`), with example jails (`enabled = false`) in `dist/jails.d`. Filters can now say `format = "plain"` to match whole lines of a program's own log file (nginx's `access.log`). The VM test attacks each real server from its own address and expects the ban. Findings in §9.3. | fail2ban's most used jails after sshd. |
 | 3d | `fwg import ufw` (reads `/etc/ufw/user.rules`/`user6.rules`, the rules ufw itself wrote) and `fwg import fail2ban` (reads `jail.local` / `jail.d/*.local`: which jails are enabled, `maxretry`, `findtime`, `bantime`, `ignoreip`; never fail2ban's regexes, which stay clean-room). Both show what they would do and change nothing without `--apply`. | Moving an existing machine over without retyping its setup. |
 | 3e | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, example jail as a conffile), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |
 
@@ -469,6 +469,26 @@ Decided against for now:
   large attack surface; fwg only bans in the kernel. Notifications can read the journal.
 - **fail2ban filter syntax**: fwg's filters stay clean-room TOML with anchored patterns
   (§9); the importer maps jail *settings* only.
+
+### 9.3 Real Dovecot, Postfix and nginx output (verified 2026-11-19 in the test VMs)
+
+Debian 13: Dovecot 2.4.1, Postfix 3.10.13, nginx 1.26.3. Ubuntu 24.04: Dovecot 2.3.21,
+Postfix 3.8.6, nginx 1.24.0. Each failed login was made from the attacker namespace,
+including user names built to plant another address.
+
+| Program | Line counted (one per failed login) | Journal `_COMM` / `_UID` | Injection |
+|---|---|---|---|
+| Dovecot 2.4 | `imap-login: Login aborted: Connection closed (auth failed, 1 attempts in 11 secs) (auth_failed): user=<U>, method=PLAIN, rip=A, lip=L, session=<S>` | `log` / 0 | The name comes **before** `rip=` and `>` is not escaped (`user=<x>, method=PLAIN, rip=203.0.113.5, lip=1>, …` seen for real). Safe because the name is `user=<[^>]*>` and the line is anchored through `session=<[^>]*>$`: an injected `>` makes the line not match. Loosening to `session=<.*>` lets a crafted name plant an address (tested). |
+| Dovecot 2.3 | the same with `Disconnected:` and without `(auth_failed)` | `log` / 0 | as above |
+| Postfix | `warning: H[A]: SASL PLAIN authentication failed: (reason unavailable), sasl_username=U` | `smtpd` / `postfix` (103, 109) | The name comes after the address; `H` is a DNS name or `unknown` and cannot hold `[`. `… failed: Connection lost to authentication server, …` (Dovecot down) is ignored: not the client's fault. |
+| nginx | `access.log`: `A - U [time] "GET / HTTP/1.1" 401 172 "-" "agent"` (401 with a user; `U` = `-` means no credentials, a browser's first try, not counted) | file | **`error.log` cannot be used safely:** it writes the user name before `client: A` with quotes *and newlines* unescaped, so a name with a newline starts a forged line of its own. `access.log` escapes them (`\x22`, `\x0A`) and begins with the real peer address. |
+
+Not counted on purpose: PAM's `pam_unix(dovecot:auth): authentication failure` (repeats a
+counted line, and `ruser=`/`user=` are attacker text), Dovecot's `no auth attempts`
+(scanners), Postfix's `connect from`/`lost connection`.
+
+Dovecot logs through its log process, so its `_COMM` is the generic `log`; that is only
+safe because journal entries from login users are dropped (§5).
 
 ## 10. Licence
 

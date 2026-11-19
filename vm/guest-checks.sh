@@ -7,6 +7,7 @@
 #   guest-checks.sh sshd-capture    record what this OpenSSH logs for each kind of failure
 #   guest-checks.sh fwgd-install    install fwgd, its unit, the sshd filter and jail
 #   guest-checks.sh bans            failed SSH logins get banned; fwg ban/unban/banned/jail
+#   guest-checks.sh services        nginx, Dovecot and Postfix jails ban real failed logins
 #   guest-checks.sh confirm-keep    a confirmed --confirm change stays
 #   guest-checks.sh confirm-lockout delete the SSH rule with --confirm (the host then checks
 #                                   new logins fail, and work again after the rollback)
@@ -49,7 +50,7 @@ attacker_net() {
   sudo ip addr add "$SERVER6/64" dev veth-vm nodad
   sudo ip link set veth-vm up
   sudo ip netns exec attacker ip link set lo up
-  for host in 2 3 11 12 13 14 15 16; do
+  for host in 2 3 11 12 13 14 15 16 31 32 33; do
     sudo ip netns exec attacker ip addr add "10.200.0.$host/24" dev veth-att
   done
   sudo ip netns exec attacker ip addr add fd20::2/64 dev veth-att nodad
@@ -229,6 +230,63 @@ case "${1:-}" in
     check "fwgd --test-filter counts the real journal's failures" \
       bash -c "grep -qE '^  failures: +[1-9][0-9]*  from [1-9]' <<<\"\$1\"" _ "$report"
     check "fwgd --test-filter names the attacker" contains "$report" "10.200.0.2 "
+    ;;
+  services)
+    # Real servers with real auth failures; each attacked from its own address.
+    export DEBIAN_FRONTEND=noninteractive
+    echo "postfix postfix/main_mailer_type select Internet Site" | sudo debconf-set-selections
+    echo "postfix postfix/mailname string fwg-test.example" | sudo debconf-set-selections
+    sudo apt-get -o DPkg::Lock::Timeout=300 install -y -q nginx apache2-utils dovecot-imapd \
+      dovecot-pop3d postfix >/tmp/apt.log 2>&1 || { tail -5 /tmp/apt.log; exit 1; }
+    sudo htpasswd -bc /etc/nginx/.htpasswd alice right-password >/dev/null 2>&1
+    echo 'server { listen 80 default_server; location / { auth_basic "test"; auth_basic_user_file /etc/nginx/.htpasswd; root /var/www/html; } }' \
+      | sudo tee /etc/nginx/sites-enabled/default >/dev/null
+    sudo systemctl restart nginx
+    # Cleartext logins from the namespace (2.4 and 2.3 spell it differently), and
+    # the SASL socket Postfix uses.
+    if /usr/sbin/dovecot --version | grep -q '^2\.4'; then clear='auth_allow_cleartext = yes'; else clear='disable_plaintext_auth = no'; fi
+    printf '%s\n%s\n' "$clear" 'service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}' | sudo tee /etc/dovecot/conf.d/99-fwg-test.conf >/dev/null
+    sudo useradd -m bob 2>/dev/null || true
+    echo 'bob:right-password' | sudo chpasswd
+    sudo systemctl restart dovecot
+    sudo /usr/sbin/postconf -e smtpd_sasl_type=dovecot smtpd_sasl_path=private/auth \
+      smtpd_sasl_auth_enable=yes smtpd_tls_auth_only=no
+    sudo systemctl restart postfix
+    for f in dovecot postfix-sasl nginx-http-auth; do
+      sudo install -m 0644 ~/filters/$f.toml /usr/share/fwg/filters/$f.toml
+      sed 's/^enabled = false/enabled = true/' ~/jails/$f.toml | sudo tee /etc/fwg/jails.d/$f.toml >/dev/null
+    done
+    # The firewall is on with incoming denied: open the mail ports, by profile.
+    check "allow the mail services by profile" bash -c 'sudo fwg allow "Dovecot IMAP" && sudo fwg allow Postfix'
+    check "fwgd --check accepts the service jails" sudo fwgd --check
+    sudo systemctl restart fwgd.service; sleep 2
+    check "jail list shows the three services" bash -c '[[ $(sudo fwg jail list | grep -cE "^(dovecot|postfix-sasl|nginx-http-auth) ") == 3 ]]'
+    sleep 2
+    attack_until_banned 10.200.0.31 60 sudo ip netns exec attacker \
+      curl -s -o /dev/null --interface 10.200.0.31 -u alice:wrong http://$SERVER/
+    check "nginx basic-auth failures banned 10.200.0.31 (after $tries requests)" in_kernel 10.200.0.31
+    check "listed under nginx-http-auth" listed 10.200.0.31 nginx-http-auth
+    # One wrong password from SOURCE: curl speaks IMAP and SMTP AUTH, and
+    # --interface picks the source address.
+    mail_login() { # mail_login SOURCE imap|smtp
+      local url="imap://$SERVER/" extra=()
+      [[ $2 == smtp ]] && { url="smtp://$SERVER/"; extra=(--mail-from a@x.example --mail-rcpt b@x.example --upload-file /dev/null); }
+      sudo ip netns exec attacker curl -s -m 15 --interface "$1" -u bob:wrong "${extra[@]}" "$url" >/dev/null 2>&1 || true
+    }
+    attack_until_banned 10.200.0.32 90 mail_login 10.200.0.32 imap
+    check "Dovecot failures banned 10.200.0.32 (after $tries logins)" in_kernel 10.200.0.32
+    check "listed under dovecot" listed 10.200.0.32 dovecot
+    attack_until_banned 10.200.0.33 90 mail_login 10.200.0.33 smtp
+    check "Postfix SMTP AUTH failures banned 10.200.0.33 (after $tries logins)" in_kernel 10.200.0.33
+    check "listed under postfix-sasl" listed 10.200.0.33 postfix-sasl
+    report="$(sudo /usr/sbin/fwgd --test-filter nginx-http-auth /var/log/nginx/access.log)"
+    check "--test-filter counts the real access.log" contains "$report" "10.200.0.31 "
     ;;
   confirm-keep)
     check "--confirm change" contains "$(sudo fwg --confirm 5 allow 8080/tcp)" "Run \`fwg confirm\` within 5 s"
