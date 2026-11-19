@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/fwg-core", "crates/fwg-ipc", "crates/fwg-nft", "crates/fwg-store", "crates/fwg-watch", "fwg", "fwgd"]
+members = ["crates/fwg-core", "crates/fwg-import", "crates/fwg-ipc", "crates/fwg-nft", "crates/fwg-store", "crates/fwg-watch", "fwg", "fwgd"]
 
 [workspace.package]
 version = "0.1.0-alpha.1"
@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 fwg-core = { path = "crates/fwg-core", version = "0.1.0-alpha.1" }
+fwg-import = { path = "crates/fwg-import", version = "0.1.0-alpha.1" }
 fwg-ipc = { path = "crates/fwg-ipc", version = "0.1.0-alpha.1" }
 fwg-nft = { path = "crates/fwg-nft", version = "0.1.0-alpha.1" }
 fwg-store = { path = "crates/fwg-store", version = "0.1.0-alpha.1" }

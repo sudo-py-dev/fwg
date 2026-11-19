@@ -1,0 +1,19 @@
+[package]
+name = "fwg-import"
+description = "Read existing ufw and fail2ban setups for fwg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fwg-core.workspace = true
+fwg-watch.workspace = true
+ipnet.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

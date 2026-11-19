@@ -346,6 +346,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fwg-import"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "fwg-core",
+ "fwg-watch",
+ "ipnet",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "fwg-ipc"
 version = "0.1.0-alpha.1"
 dependencies = [
