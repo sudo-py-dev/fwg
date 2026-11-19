@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use fwg_watch::{FileTail, JournalHandle, JournalReader, LogEvent, LogSource, parse_syslog_line};
+use fwg_watch::{
+    FileTail, JournalHandle, JournalReader, LogEvent, LogSource, login_uid_min, parse_syslog_line,
+};
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
 
@@ -109,6 +111,7 @@ fn follow_file(
                         message: parsed.message.to_owned(),
                         at: now(),
                         cursor: None,
+                        uid: None,
                     };
                     if events.blocking_send((spec.index, event)).is_err() {
                         return; // the main loop has stopped
@@ -136,9 +139,11 @@ fn follow_journal(
 ) {
     let programs: Vec<&str> = spec.programs.iter().map(String::as_str).collect();
     let mut cursor = spec.cursor.clone();
-    info!(jail = %spec.name, programs = ?programs, resume = cursor.is_some(), "following journal");
+    // Entries from login users are dropped: they can name a program `sshd` too.
+    let uid_min = login_uid_min();
+    info!(jail = %spec.name, programs = ?programs, resume = cursor.is_some(), uid_below = uid_min, "following journal");
     while !stop.load(Ordering::Relaxed) {
-        match JournalReader::spawn(&programs, cursor.as_deref()) {
+        match JournalReader::spawn(&programs, cursor.as_deref(), uid_min) {
             Ok((handle, mut reader)) => {
                 *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle);
                 // `shutdown` may have run between the check above and storing the handle.

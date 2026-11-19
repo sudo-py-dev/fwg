@@ -365,6 +365,7 @@ mod tests {
             message: format!("bad from {addr}"),
             at: Duration::from_secs(at),
             cursor: cursor.map(str::to_owned),
+            uid: Some(0),
         }
     }
 

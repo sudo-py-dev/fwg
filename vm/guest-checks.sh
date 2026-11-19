@@ -197,6 +197,14 @@ case "${1:-}" in
     check "jail status lists it" contains "$(sudo fwg jail status sshd)" "10.200.0.2"
     check "jail status counts the ban" contains "$(sudo fwg jail status sshd)" "Bans:      1 since fwgd started"
     check "the harness address 10.0.2.2 is not banned" not in_kernel 10.0.2.2
+    # A login user's copy of logger named like sshd logs with _COMM=sshd; only
+    # its _UID gives it away. 8 fake failures would be enough for a ban.
+    for name in sshd sshd-session; do
+      cp "$(command -v logger)" "/tmp/$name"
+      for i in 1 2 3 4; do "/tmp/$name" -t sshd "Invalid user fake$i from 192.0.2.77 port 22"; done
+    done
+    sleep 2
+    check "a login user's fake sshd lines ban nobody" not in_kernel 192.0.2.77
     sudo systemctl restart fwgd.service; sleep 1
     check "fwgd active after restart" systemctl is-active fwgd.service
     check "ban kept across restart" in_kernel 10.200.0.2
