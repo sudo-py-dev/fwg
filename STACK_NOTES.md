@@ -331,7 +331,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
 | 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. | `fwg-store` |
 | 2e ✅ | `fwgd`: loads jails (local filters override shipped ones), opens the DB, creates the ban table and restores running bans, then one loop handles log events, control requests (`status`, `banned`, `ban`, `unban`), saving journal cursors every 5 s and pruning history older than 90 d. Repeat offences counted over 30 d. Sources run on threads; SIGTERM saves cursors, stops them and removes the socket. Socket `0600` in a `0700` dir, peer uid checked, one request per connection, 1 MiB / 5 s limits. `dist/fwgd.service` (`systemd-analyze security`: 4.1 OK). | `fwgd`, `fwg-ipc` |
-| 2f ✅ | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`, over the control socket (`--socket`/`FWG_SOCKET` to override; 10 s limit to connect and again for the exchange — the connect runs on a thread because `UnixStream` has no connect timeout; plain errors for "not running" and "not root"). Example jail `dist/jails.d/sshd.toml`. VM test: failed SSH logins from a network namespace *inside* the VM get banned, shown by the CLI, lifted by `unban`, and kept across `systemctl restart fwgd` and a reboot. `filters/sshd.toml` verified against real OpenSSH output (§9.1). | `fwg`, `vm/` |
+| 2f ✅ | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`, over the control socket (`--socket`/`FWG_SOCKET` to override; 10 s limit to connect and again for the exchange — the connect runs on a thread because `UnixStream` has no connect timeout; plain errors for "not running" and "not root"). Example jail `dist/jails.d/sshd.toml`. VM test: failed SSH logins over IPv4 and IPv6 from a network namespace *inside* the VM get banned, shown by the CLI, lifted by `unban`, and kept across `systemctl restart fwgd` and a reboot. `filters/sshd.toml` verified against real OpenSSH output (§9.1). | `fwg`, `vm/` |
 
 Decisions:
 
@@ -402,7 +402,10 @@ Process names (`_COMM`, which the journal source matches):
 | Debian 13 | 10.0p2 | `sshd-session` (no line came from the new `sshd-auth` helper) |
 | Ubuntu 24.04 | 9.6p1 | `sshd` |
 
-Both are in the filter's `programs`; the message texts are identical on both.
+Both are in the filter's `programs`; the message texts are identical on both. Over
+IPv6 the lines are the same with the bare address (`from fd20::2 port P`, no brackets);
+the VM test bans an IPv6 attacker too (in `ban6`, IPv4 from the same host still let in,
+restored after reboot).
 
 ## 10. Licence
 

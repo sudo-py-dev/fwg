@@ -224,9 +224,28 @@ const REAL_OPENSSH: &[(&str, bool)] = &[
     ),
 ];
 
-fn check_real_lines(lines: &[(&str, bool)]) {
-    assert!(lines.len() > 10);
-    let expected: IpAddr = "192.0.2.1".parse().unwrap();
+/// The same connection over IPv6 (wrong password, unknown user), from both VMs.
+const REAL_OPENSSH_IPV6: &[(&str, bool)] = &[
+    (
+        "Invalid user no-such-user from 2001:db8::1 port 56511",
+        true,
+    ),
+    (
+        "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=2001:db8::1",
+        false,
+    ),
+    (
+        "Failed password for invalid user no-such-user from 2001:db8::1 port 56511 ssh2",
+        true,
+    ),
+    (
+        "Connection closed by invalid user no-such-user 2001:db8::1 port 56511 [preauth]",
+        true,
+    ),
+];
+
+fn check_real_lines(lines: &[(&str, bool)], expected: &str) {
+    let expected: IpAddr = expected.parse().unwrap();
     for (message, counts) in lines {
         let found = source(message);
         if *counts {
@@ -239,5 +258,7 @@ fn check_real_lines(lines: &[(&str, bool)]) {
 
 #[test]
 fn real_openssh_lines() {
-    check_real_lines(REAL_OPENSSH);
+    assert!(REAL_OPENSSH.len() > 10);
+    check_real_lines(REAL_OPENSSH, "192.0.2.1");
+    check_real_lines(REAL_OPENSSH_IPV6, "2001:db8::1");
 }
