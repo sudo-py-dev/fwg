@@ -1,0 +1,11 @@
+# Ban addresses that keep failing nginx HTTP basic authentication.
+# Install as /etc/fwg/jails.d/nginx-http-auth.toml and set enabled = true.
+# Reads access.log in nginx's default "combined" format; see the filter for why.
+
+[nginx-http-auth]
+enabled = false
+log = "/var/log/nginx/access.log"
+max_retry = 5
+find_time = "10m"
+ban_time = "1h"
+# ignore = ["192.0.2.0/24"]

@@ -2,7 +2,8 @@
 # Full-system smoke test (tier 4): install fwg and fwgd in a test VM, check the
 # SSH lockout guard over a real SSH login, every rule kind on that distro's nft,
 # ufw coexistence, that failed SSH logins get banned (from a network namespace
-# inside the VM), that `--confirm` undoes a change that locks out SSH, and that
+# inside the VM), that the nginx, Dovecot and Postfix jails ban real failed logins,
+# that `--confirm` undoes a change that locks out SSH, and that
 # rules and bans come back after a reboot.
 #
 #   vm/smoke-test.sh [debian|ubuntu ...]     (default: both)
@@ -27,11 +28,13 @@ run_vm() {
   # Both are called sshd.toml; guest-checks.sh installs them under that name.
   "$VM" push "$name" "$ROOT/filters/sshd.toml" sshd-filter.toml >/dev/null
   "$VM" push "$name" "$ROOT/dist/jails.d/sshd.toml" sshd-jail.toml >/dev/null
-  "$VM" ssh "$name" 'mkdir -p apps' >/dev/null
+  "$VM" ssh "$name" 'mkdir -p apps filters jails' >/dev/null
   for f in "$ROOT"/apps/*.toml; do "$VM" push "$name" "$f" apps/ >/dev/null; done
+  for f in "$ROOT"/filters/*.toml; do "$VM" push "$name" "$f" filters/ >/dev/null; done
+  for f in "$ROOT"/dist/jails.d/*.toml; do "$VM" push "$name" "$f" jails/ >/dev/null; done
 
   local failed=0
-  for phase in install enable rules ufw sshd-capture fwgd-install bans confirm-keep; do
+  for phase in install enable rules ufw sshd-capture fwgd-install bans services confirm-keep; do
     echo "[$phase]"
     "$VM" ssh "$name" "bash guest-checks.sh $phase" || failed=1
   done

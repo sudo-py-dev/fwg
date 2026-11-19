@@ -14,7 +14,7 @@ mod tracker;
 mod watcher;
 
 pub use duration::{Span, SpanError};
-pub use filter::{Filter, FilterError, MAX_LINE_BYTES, Verdict};
+pub use filter::{Filter, FilterError, LineFormat, MAX_LINE_BYTES, Verdict};
 pub use jail::{Jail, JailError, LogSource};
 pub use journal::{
     DEFAULT_UID_MIN, JOURNALCTL_PATHS, JournalHandle, JournalReader, LogEvent, journalctl_args,

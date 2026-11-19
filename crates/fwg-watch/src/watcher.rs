@@ -3,20 +3,31 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use crate::filter::Filter;
-use crate::jail::Jail;
+use crate::filter::{Filter, LineFormat};
+use crate::jail::{Jail, LogSource};
 use crate::tracker::Tracker;
 
-/// A jail was given a filter with a different name.
+/// A jail and the filter it was given do not fit together.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("jail `{jail}` uses filter `{wanted}`, not `{given}`")]
-pub struct FilterMismatch {
-    /// The jail.
-    pub jail: String,
-    /// The filter it names.
-    pub wanted: String,
-    /// The filter it was given.
-    pub given: String,
+pub enum FilterMismatch {
+    /// The filter has a different name than the jail asks for.
+    #[error("jail `{jail}` uses filter `{wanted}`, not `{given}`")]
+    Name {
+        /// The jail.
+        jail: String,
+        /// The filter it names.
+        wanted: String,
+        /// The filter it was given.
+        given: String,
+    },
+    /// A `plain` filter on the journal, which only has program messages.
+    #[error("jail `{jail}`: filter `{filter}` reads plain log lines; set `log` to its log file")]
+    PlainOnJournal {
+        /// The jail.
+        jail: String,
+        /// The filter.
+        filter: String,
+    },
 }
 
 /// An address that reached the jail's failure limit.
@@ -40,13 +51,20 @@ impl Watcher {
     /// Combines `jail` with the filter it names.
     ///
     /// # Errors
-    /// [`FilterMismatch`] if `filter` is not the jail's filter.
+    /// [`FilterMismatch`] if `filter` is not the jail's filter, or is a `plain`
+    /// filter on a journal jail.
     pub fn new(jail: Jail, filter: Filter) -> Result<Self, FilterMismatch> {
         if jail.filter() != filter.name() {
-            return Err(FilterMismatch {
+            return Err(FilterMismatch::Name {
                 jail: jail.name().to_owned(),
                 wanted: jail.filter().to_owned(),
                 given: filter.name().to_owned(),
+            });
+        }
+        if filter.format() == LineFormat::Plain && *jail.log() == LogSource::Journal {
+            return Err(FilterMismatch::PlainOnJournal {
+                jail: jail.name().to_owned(),
+                filter: filter.name().to_owned(),
             });
         }
         let tracker = Tracker::new(jail.max_retry(), jail.find_time());
@@ -104,6 +122,28 @@ mod tests {
         failures = ['^bad login from <HOST>$']
     "#;
 
+    #[test]
+    fn plain_filters_need_a_log_file() {
+        let plain = Filter::from_toml(
+            "web",
+            "description = \"w\"\nformat = \"plain\"\nfailures = ['^<HOST> x$']\n",
+        )
+        .unwrap();
+        let on_journal = Jail::parse_file("[web]\n").unwrap().remove(0);
+        assert!(matches!(
+            Watcher::new(on_journal, plain.clone()),
+            Err(FilterMismatch::PlainOnJournal { .. })
+        ));
+        let on_file = Jail::parse_file("[web]\nlog = \"/var/log/nginx/access.log\"\n")
+            .unwrap()
+            .remove(0);
+        let mut w = Watcher::new(on_file, plain).unwrap();
+        assert!(
+            w.process("", "192.0.2.7 x", Duration::from_secs(1))
+                .is_none()
+        );
+    }
+
     fn watcher(jail: &str) -> Watcher {
         let jail = Jail::parse_file(jail).unwrap().remove(0);
         Watcher::new(jail, Filter::from_toml("demo", FILTER).unwrap()).unwrap()
@@ -139,6 +179,6 @@ mod tests {
     fn rejects_the_wrong_filter() {
         let jail = Jail::parse_file("[sshd]\n").unwrap().remove(0);
         let err = Watcher::new(jail, Filter::from_toml("demo", FILTER).unwrap()).unwrap_err();
-        assert_eq!(err.wanted, "sshd");
+        assert!(matches!(err, FilterMismatch::Name { ref wanted, .. } if wanted == "sshd"));
     }
 }

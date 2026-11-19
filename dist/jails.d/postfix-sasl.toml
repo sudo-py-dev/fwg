@@ -1,0 +1,10 @@
+# Ban addresses that keep failing SMTP AUTH (mail submission) on Postfix.
+# Install as /etc/fwg/jails.d/postfix-sasl.toml and set enabled = true.
+
+[postfix-sasl]
+enabled = false
+log = "journal"
+max_retry = 5
+find_time = "10m"
+ban_time = "1h"
+# ignore = ["192.0.2.0/24"]

@@ -1,0 +1,21 @@
+# Postfix SMTP AUTH (SASL) failures. Shipped with fwg; override in /etc/fwg/filters/postfix-sasl.toml.
+#
+# Written from Postfix 3.8.6 (Ubuntu 24.04) and 3.10.13 (Debian 13) output. The address
+# comes right after the client's host name, which Postfix only takes from DNS when it
+# is a valid name (else `unknown`), so it cannot contain `[`; the user name comes
+# after it, at the end of the line.
+
+description = "Postfix SMTP AUTH (SASL) failures"
+
+# smtpd's process name in the journal; its syslog tags in log files.
+programs = ["smtpd", "postfix/smtpd", "postfix/submission/smtpd", "postfix/smtps/smtpd"]
+
+failures = [
+    # "warning: unknown[192.0.2.7]: SASL PLAIN authentication failed: (reason unavailable), sasl_username=bob"
+    '^warning: [A-Za-z0-9.-]+\[<HOST>\]: SASL [A-Z0-9-]+ authentication failed: .*$',
+]
+
+ignore = [
+    # Postfix could not reach the SASL server (Dovecot down): not the client's fault.
+    '^warning: [A-Za-z0-9.-]+\[[0-9A-Fa-f:.]+\]: SASL [A-Z0-9-]+ authentication failed: Connection lost to authentication server, .*$',
+]

@@ -166,6 +166,7 @@ async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
             name: watcher.jail().name().to_owned(),
             log: watcher.jail().log().clone(),
             programs: watcher.filter().programs().to_vec(),
+            plain: watcher.filter().format() == fwg_watch::LineFormat::Plain,
             cursor,
         });
     }

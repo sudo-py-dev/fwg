@@ -34,6 +34,8 @@ pub struct SourceSpec {
     pub log: LogSource,
     /// Program names the jail's filter handles.
     pub programs: Vec<String>,
+    /// Whether file lines are taken whole (`plain` filter) instead of as syslog lines.
+    pub plain: bool,
     /// Journal position to resume after.
     pub cursor: Option<String>,
 }
@@ -103,12 +105,17 @@ fn follow_file(
             Ok(lines) => {
                 last_error = None;
                 for line in lines {
-                    let Some(parsed) = parse_syslog_line(&line) else {
-                        continue;
+                    let (program, message) = if spec.plain {
+                        (String::new(), line)
+                    } else {
+                        let Some(parsed) = parse_syslog_line(&line) else {
+                            continue;
+                        };
+                        (parsed.program.to_owned(), parsed.message.to_owned())
                     };
                     let event = LogEvent {
-                        program: parsed.program.to_owned(),
-                        message: parsed.message.to_owned(),
+                        program,
+                        message,
                         at: now(),
                         cursor: None,
                         uid: None,

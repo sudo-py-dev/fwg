@@ -1,0 +1,12 @@
+# Ban addresses that keep failing to log in to Dovecot (IMAP, POP3).
+# Install as /etc/fwg/jails.d/dovecot.toml and set enabled = true.
+
+[dovecot]
+enabled = false
+# The journal; Dovecot logs from its log process as root.
+log = "journal"
+# Each failed connection logs one line, so this is 5 failed connections.
+max_retry = 5
+find_time = "10m"
+ban_time = "1h"
+# ignore = ["192.0.2.0/24"]

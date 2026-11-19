@@ -1,0 +1,24 @@
+# nginx HTTP basic authentication failures, from access.log (the default "combined"
+# format). Shipped with fwg; override in /etc/fwg/filters/nginx-http-auth.toml.
+#
+# Why access.log and not error.log: error.log writes the user name unescaped, quotes
+# and newlines included, before the client address, so a user name with a newline
+# can start a forged line of its own (verified with nginx 1.24 and 1.26). access.log
+# escapes `"` and control characters (`\x22`, `\x0A`) and starts every line with the
+# real peer address, which nothing the client sends can come before.
+#
+# Counts 401 answers to requests that carried a user name; a browser's first request
+# without credentials (user `-`) is not counted. Only for sites protected by
+# auth_basic: an application that answers 401 itself is counted too. Behind a reverse
+# proxy the first field is the proxy, unless set_real_ip_from is set up.
+
+description = "nginx HTTP basic authentication failures (access.log)"
+
+format = "plain"
+
+failures = [
+    # '192.0.2.7 - alice [19/Nov/2026:11:38:50 +0000] "GET / HTTP/1.1" 401 172 "-" "curl/8.14.1"'
+    '^<HOST> - (?:[^-].*|-.+) \[[^\]]+\] "[^"]*" 401 \d+ "[^"]*" "[^"]*"$',
+]
+
+ignore = []
