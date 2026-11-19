@@ -80,7 +80,27 @@ pub struct Filter {
     description: String,
     programs: Vec<String>,
     failures: Vec<Regex>,
+    /// The failure patterns as written, for reports (`fwgd --test-filter`).
+    failure_patterns: Vec<String>,
     ignore: Vec<Regex>,
+}
+
+/// What a filter makes of one message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// A failure from `addr`, found by failure pattern number `pattern` (from 0).
+    Failure {
+        /// The source address (IPv4-mapped IPv6 as IPv4).
+        addr: IpAddr,
+        /// Index into [`Filter::failure_patterns`].
+        pattern: usize,
+    },
+    /// Matches an `ignore` pattern.
+    Ignored,
+    /// Longer than [`MAX_LINE_BYTES`].
+    TooLong,
+    /// No failure pattern matches (or what `<HOST>` matched is not an address).
+    NoMatch,
 }
 
 impl Filter {
@@ -108,6 +128,7 @@ impl Filter {
                 .iter()
                 .map(|p| compile(p, true))
                 .collect::<Result<_, _>>()?,
+            failure_patterns: file.failures,
             ignore: file
                 .ignore
                 .iter()
@@ -146,13 +167,36 @@ impl Filter {
     /// IPv4-mapped IPv6 addresses (`::ffff:192.0.2.1`) are returned as IPv4.
     #[must_use]
     pub fn failure_source(&self, message: &str) -> Option<IpAddr> {
-        if message.len() > MAX_LINE_BYTES || self.ignore.iter().any(|re| re.is_match(message)) {
-            return None;
+        match self.classify(message) {
+            Verdict::Failure { addr, .. } => Some(addr),
+            Verdict::Ignored | Verdict::TooLong | Verdict::NoMatch => None,
         }
-        self.failures.iter().find_map(|re| {
-            let host = re.captures(message)?.name("host")?.as_str();
-            host.parse::<IpAddr>().ok().map(|ip| ip.to_canonical())
-        })
+    }
+
+    /// What this filter makes of `message`, with the pattern that matched.
+    #[must_use]
+    pub fn classify(&self, message: &str) -> Verdict {
+        if message.len() > MAX_LINE_BYTES {
+            return Verdict::TooLong;
+        }
+        if self.ignore.iter().any(|re| re.is_match(message)) {
+            return Verdict::Ignored;
+        }
+        self.failures
+            .iter()
+            .enumerate()
+            .find_map(|(pattern, re)| {
+                let host = re.captures(message)?.name("host")?.as_str();
+                let addr = host.parse::<IpAddr>().ok()?.to_canonical();
+                Some(Verdict::Failure { addr, pattern })
+            })
+            .unwrap_or(Verdict::NoMatch)
+    }
+
+    /// The failure patterns, as written in the filter file.
+    #[must_use]
+    pub fn failure_patterns(&self) -> &[String] {
+        &self.failure_patterns
     }
 }
 
@@ -256,6 +300,39 @@ mod tests {
             f.failure_source("Invalid user admin from 203.0.113.5 port 22"),
             Some("203.0.113.5".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn classify_names_the_pattern() {
+        let f = filter(
+            &[
+                r"^first <HOST>$",
+                r"^second (?:<HOST>|\S+)$",
+                r"^second <HOST> again$",
+            ],
+            &[r"^second test$"],
+        )
+        .unwrap();
+        assert_eq!(f.failure_patterns()[1], r"^second (?:<HOST>|\S+)$");
+        let addr = "192.0.2.7".parse().unwrap();
+        assert_eq!(
+            f.classify("first 192.0.2.7"),
+            Verdict::Failure { addr, pattern: 0 }
+        );
+        assert_eq!(
+            f.classify("second 192.0.2.7"),
+            Verdict::Failure { addr, pattern: 1 }
+        );
+        assert_eq!(f.classify("second test"), Verdict::Ignored);
+        assert_eq!(f.classify("third 192.0.2.7"), Verdict::NoMatch);
+        // What <HOST> matched must parse as an address.
+        assert_eq!(
+            f.classify("second 999.1.1.1 again"),
+            Verdict::NoMatch,
+            "999.1.1.1 is no address"
+        );
+        let line = format!("first {}", "1".repeat(MAX_LINE_BYTES));
+        assert_eq!(f.classify(&line), Verdict::TooLong);
     }
 
     #[test]
