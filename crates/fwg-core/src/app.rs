@@ -182,18 +182,31 @@ struct ProfileTable {
 pub struct Apps {
     /// Keyed by lowercase name.
     profiles: BTreeMap<String, AppProfile>,
+    /// Directories skipped because this user may not read them.
+    unreadable: Vec<PathBuf>,
 }
 
 impl Apps {
     /// Loads every `*.toml` in `dirs`, highest priority first. Missing directories
-    /// are skipped; within a directory, files are read in name order.
+    /// are skipped, and so are directories this user may not read (`/etc/fwg` is
+    /// root only), which [`unreadable`](Self::unreadable) lists. Within a
+    /// directory, files are read in name order.
     ///
     /// # Errors
     /// If a file cannot be read or is invalid; the error names the file.
     pub fn load(dirs: &[PathBuf]) -> Result<Self, AppError> {
         let mut apps = Self::default();
         for dir in dirs {
-            for path in toml_files(dir)? {
+            let files = match toml_files(dir) {
+                Err(AppError::Io { source, .. })
+                    if source.kind() == io::ErrorKind::PermissionDenied =>
+                {
+                    apps.unreadable.push(dir.clone());
+                    continue;
+                }
+                other => other?,
+            };
+            for path in files {
                 for profile in parse_file(&path)? {
                     // A higher-priority directory already defined it: that one wins.
                     apps.profiles.entry(profile.name.key()).or_insert(profile);
@@ -211,6 +224,12 @@ impl Apps {
         self.profiles
             .get(&name.to_lowercase())
             .ok_or_else(|| AppError::Unknown(name.to_owned()))
+    }
+
+    /// Directories that were skipped because this user may not read them.
+    #[must_use]
+    pub fn unreadable(&self) -> &[PathBuf] {
+        &self.unreadable
     }
 
     /// All profiles, by name.
@@ -435,6 +454,22 @@ ports = ["80,443/tcp", "443/udp"]
             "2222/tcp"
         );
         assert!(Apps::load(&[PathBuf::from("/nonexistent")]).is_ok());
+    }
+
+    #[test]
+    fn unreadable_directories_are_skipped_and_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let local = tempfile::tempdir().unwrap();
+        let shipped = tempfile::tempdir().unwrap();
+        fs::write(shipped.path().join("a.toml"), PROFILES).unwrap();
+        fs::set_permissions(local.path(), fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = fs::read_dir(local.path()).is_ok(); // root reads anyway
+        let apps = Apps::load(&[local.path().to_owned(), shipped.path().to_owned()]).unwrap();
+        fs::set_permissions(local.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(apps.get("OpenSSH").is_ok());
+        if !readable {
+            assert_eq!(apps.unreadable(), [local.path().to_owned()]);
+        }
     }
 
     #[test]

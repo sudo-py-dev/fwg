@@ -184,6 +184,13 @@ impl<B: Backend> App<B> {
     /// `fwg app list`.
     pub fn app_list(&self, out: &mut dyn Write) -> Result<()> {
         let apps = Apps::load(&self.apps_dirs)?;
+        for dir in apps.unreadable() {
+            writeln!(
+                out,
+                "(Skipped {}: run as root to include local profiles.)",
+                dir.display()
+            )?;
+        }
         let profiles: Vec<_> = apps.iter().collect();
         if profiles.is_empty() {
             writeln!(out, "No application profiles found.")?;
