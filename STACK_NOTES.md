@@ -194,9 +194,18 @@ of FFI `unsafe`. Verified on systemd 255:
 - Each entry has `__CURSOR`, so **the daemon stores the last cursor itself** instead of
   `--cursor-file`, which journalctl writes only on a clean exit (std can only SIGKILL).
 - Messages that are not valid UTF-8 arrive as a JSON array of bytes; handled.
-- **Matching uses the trusted `_COMM` field** (the real process name, set by journald), not
-  `SYSLOG_IDENTIFIER`/`-t`, which any local user can set. Verified: `logger -t sshd` has
-  `_COMM=logger` and is not matched. Tested in `crates/fwg-watch/tests/journal.rs`.
+- **Entries are picked by `_COMM`, but trusted only from system accounts.** `_COMM` (the
+  process name journald records) is better than `SYSLOG_IDENTIFIER`/`-t`, which any local
+  user sets, but it is **not** proof: it is the executable's name. ⚠️ Found 2026-11-19 (step
+  3c): a login user's copy of `logger` named `sshd` (Ubuntu) or `sshd-session` (Debian) logs
+  with exactly that `_COMM`, so until then a local user could get any address banned. What
+  a user cannot fake is `_UID`, set by journald from the kernel's socket credentials. Real
+  failure lines come from `_UID=0` (`ssh.service`); the fakes had `_UID=1000`
+  (`session-N.scope`). So the reader drops entries without `_UID` or with `_UID` ≥ `UID_MIN`
+  from `/etc/login.defs` (default 1000): sshd, Dovecot and Postfix log as root or their own
+  system user. Tested against the real journal in `crates/fwg-watch/tests/journal.rs`
+  (the renamed `logger` passes without the check, and is dropped with it) and in the VMs
+  (8 fake lines from a login user ban nobody).
 - The event time is journald's `__REALTIME_TIMESTAMP`, so no date parsing is needed.
 - The reader blocks on a thread; dropping its `JournalHandle` kills journalctl, which ends
   the blocked read cleanly.

@@ -17,7 +17,8 @@ pub use duration::{Span, SpanError};
 pub use filter::{Filter, FilterError, MAX_LINE_BYTES, Verdict};
 pub use jail::{Jail, JailError, LogSource};
 pub use journal::{
-    JOURNALCTL_PATHS, JournalHandle, JournalReader, LogEvent, journalctl_args, parse_journal_entry,
+    DEFAULT_UID_MIN, JOURNALCTL_PATHS, JournalHandle, JournalReader, LogEvent, journalctl_args,
+    login_uid_min, parse_journal_entry,
 };
 pub use syslog::{SyslogLine, parse_syslog_line};
 pub use tail::FileTail;

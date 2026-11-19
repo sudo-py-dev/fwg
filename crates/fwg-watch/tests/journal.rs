@@ -11,7 +11,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fwg_watch::{JournalReader, LogEvent};
+use fwg_watch::{JournalReader, LogEvent, login_uid_min};
+
+/// Accepts entries from every user, to test parsing with the test's own user.
+const ANY_UID: u32 = u32::MAX;
 
 fn unique(label: &str) -> String {
     format!(
@@ -22,7 +25,11 @@ fn unique(label: &str) -> String {
 }
 
 fn log(tag: &str, message: &str) {
-    let ok = Command::new("logger")
+    log_with("logger", tag, message);
+}
+
+fn log_with(program: &str, tag: &str, message: &str) {
+    let ok = Command::new(program)
         .args(["-t", tag, message])
         .status()
         .is_ok_and(|s| s.success());
@@ -54,14 +61,16 @@ fn journal_readable() -> bool {
     false
 }
 
-/// Follows `programs` while `send` keeps logging, until `wanted` arrives or `wait` passes.
+/// Follows `programs` (from UIDs below `uid_min`) while `send` keeps logging,
+/// until `wanted` arrives or `wait` passes.
 fn follow_until(
     programs: &[&str],
+    uid_min: u32,
     wait: Duration,
     send: impl Fn(),
     wanted: &str,
 ) -> Option<LogEvent> {
-    let (handle, mut reader) = JournalReader::spawn(programs, None).unwrap();
+    let (handle, mut reader) = JournalReader::spawn(programs, None, uid_min).unwrap();
     let (tx, rx) = mpsc::channel();
     let thread = thread::spawn(move || {
         while let Ok(Some(event)) = reader.next_event() {
@@ -103,6 +112,7 @@ fn journal_reader() {
     let message = unique("hello");
     let event = follow_until(
         &["logger"],
+        ANY_UID,
         Duration::from_secs(10),
         || log("anything", &message),
         &message,
@@ -120,9 +130,63 @@ fn journal_reader() {
     let spoofed = format!("Invalid user {message} from 198.51.100.99 port 22");
     let event = follow_until(
         &["sshd", "sshd-session"],
+        ANY_UID,
         Duration::from_secs(3),
         || log("sshd", &spoofed),
         &message,
     );
     assert_eq!(event, None);
+
+    // Nor a copy of logger *named* sshd: its `_COMM` is sshd, but its `_UID` is ours.
+    let uid = unsafe_free_uid();
+    if uid < login_uid_min() {
+        eprintln!("skipping the renamed-logger check: running as system user {uid}");
+        return;
+    }
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let fake = dir.path().join("sshd");
+    std::fs::copy(which_logger(), &fake).unwrap();
+    let fake = fake.to_str().unwrap().to_owned();
+    let message = unique("renamed");
+    let spoofed = format!("Invalid user {message} from 198.51.100.98 port 22");
+    // Without the UID check it really does pass as sshd: the attack is real.
+    let event = follow_until(
+        &["sshd"],
+        ANY_UID,
+        Duration::from_secs(10),
+        || log_with(&fake, "sshd", &spoofed),
+        &message,
+    )
+    .expect("a renamed logger should log with _COMM=sshd");
+    assert_eq!(event.program, "sshd");
+    assert_eq!(event.uid, Some(uid));
+    // With it, the entry never reaches the filters.
+    let message = unique("renamed-blocked");
+    let spoofed = format!("Invalid user {message} from 198.51.100.97 port 22");
+    let event = follow_until(
+        &["sshd"],
+        login_uid_min(),
+        Duration::from_secs(3),
+        || log_with(&fake, "sshd", &spoofed),
+        &message,
+    );
+    assert_eq!(event, None);
+}
+
+/// This process's real UID, from `/proc` (no libc call, no `unsafe`).
+fn unsafe_free_uid() -> u32 {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap();
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("Uid:"))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|uid| uid.parse().ok())
+        .unwrap()
+}
+
+fn which_logger() -> &'static str {
+    ["/usr/bin/logger", "/bin/logger"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+        .expect("logger not installed")
 }

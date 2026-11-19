@@ -1,8 +1,13 @@
 //! Reading the systemd journal through `journalctl --follow --output=json`.
 //!
-//! Entries are matched on the **trusted** `_COMM` field (the real process name,
-//! recorded by journald), not on `SYSLOG_IDENTIFIER`, which any local user can set:
-//! `logger -t sshd "Invalid user x from <victim> port 22"` must not ban `<victim>`.
+//! Entries are picked by `_COMM` (the process name journald recorded), not by
+//! `SYSLOG_IDENTIFIER`, which any local user sets with `logger -t sshd`. But `_COMM`
+//! alone is not proof either: it is the executable's name, so a user who copies
+//! `logger` to `~/sshd` logs with `_COMM=sshd` (verified on Debian 13 and Ubuntu
+//! 24.04). What a user cannot fake is `_UID`, which journald takes from the
+//! kernel's socket credentials. So only entries from **system accounts** (`_UID`
+//! below `UID_MIN` of `/etc/login.defs`, usually 1000) are passed on: the services
+//! fwg watches run as root or as their own system user, never as a login user.
 //!
 //! Running `journalctl` as a child process keeps fwg free of the C bindings to
 //! libsystemd (and of `unsafe`).
@@ -19,6 +24,9 @@ use serde::Deserialize;
 pub const JOURNALCTL_PATHS: &[&str] = &["/usr/bin/journalctl", "/bin/journalctl"];
 /// JSON entries longer than this are skipped.
 const MAX_ENTRY_BYTES: u64 = 64 * 1024;
+/// First login-user UID when `/etc/login.defs` does not say (Debian and Ubuntu default).
+pub const DEFAULT_UID_MIN: u32 = 1000;
+const LOGIN_DEFS: &str = "/etc/login.defs";
 
 /// One log message, from a file or the journal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +39,26 @@ pub struct LogEvent {
     pub at: Duration,
     /// Journal position, to resume after a restart (`None` for files).
     pub cursor: Option<String>,
+    /// The sender's user ID as journald recorded it (`None` for files).
+    pub uid: Option<u32>,
+}
+
+/// The first UID of login users: `UID_MIN` from `/etc/login.defs`, else
+/// [`DEFAULT_UID_MIN`]. Journal entries from this UID up are not trusted.
+#[must_use]
+pub fn login_uid_min() -> u32 {
+    std::fs::read_to_string(LOGIN_DEFS)
+        .ok()
+        .and_then(|text| parse_uid_min(&text))
+        .unwrap_or(DEFAULT_UID_MIN)
+}
+
+/// `UID_MIN` from `login.defs` text: `UID_MIN<spaces>N`, comments ignored.
+fn parse_uid_min(text: &str) -> Option<u32> {
+    text.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        (words.next()? == "UID_MIN").then(|| words.next()?.parse().ok())?
+    })
 }
 
 /// Arguments for `journalctl`: follow new entries from `programs` as JSON,
@@ -71,6 +99,8 @@ pub fn parse_journal_entry(json: &[u8]) -> Option<LogEvent> {
         realtime_us: String,
         #[serde(rename = "__CURSOR")]
         cursor: Option<String>,
+        #[serde(rename = "_UID")]
+        uid: Option<String>,
     }
     /// journald sends messages that are not valid UTF-8 as an array of bytes.
     #[derive(Deserialize)]
@@ -89,6 +119,7 @@ pub fn parse_journal_entry(json: &[u8]) -> Option<LogEvent> {
         message,
         at: Duration::from_micros(entry.realtime_us.parse().ok()?),
         cursor: entry.cursor,
+        uid: entry.uid.and_then(|u| u.parse().ok()),
     })
 }
 
@@ -112,10 +143,14 @@ impl Drop for JournalHandle {
 #[derive(Debug)]
 pub struct JournalReader {
     out: BufReader<ChildStdout>,
+    /// Entries from this UID up, or without a UID, are dropped.
+    uid_min: u32,
 }
 
 impl JournalReader {
-    /// Starts following entries from `programs`.
+    /// Starts following entries from `programs` sent by system accounts: entries
+    /// whose `_UID` is missing or at least `uid_min` are dropped (see the module
+    /// docs; pass [`login_uid_min`]).
     ///
     /// Keep the returned handle alive for as long as the reader is used.
     ///
@@ -124,6 +159,7 @@ impl JournalReader {
     pub fn spawn(
         programs: &[&str],
         after_cursor: Option<&str>,
+        uid_min: u32,
     ) -> io::Result<(JournalHandle, Self)> {
         let program = JOURNALCTL_PATHS
             .iter()
@@ -148,6 +184,7 @@ impl JournalReader {
             JournalHandle { child },
             Self {
                 out: BufReader::new(stdout),
+                uid_min,
             },
         ))
     }
@@ -174,7 +211,9 @@ impl JournalReader {
                 // EOF in the middle of a line: journalctl exited.
                 return Ok(None);
             }
-            if let Some(event) = parse_journal_entry(&line) {
+            if let Some(event) = parse_journal_entry(&line)
+                && event.uid.is_some_and(|uid| uid < self.uid_min)
+            {
                 return Ok(Some(event));
             }
         }
@@ -229,11 +268,28 @@ mod tests {
                 message: "Invalid user x from 192.0.2.1 port 22".into(),
                 at: Duration::from_micros(1_795_041_002_995_153),
                 cursor: Some("s=1;i=2".into()),
+                uid: None,
             })
         );
         let bytes =
             br#"{"MESSAGE":[98,97,100,32,255],"_COMM":"logger","__REALTIME_TIMESTAMP":"1"}"#;
         assert_eq!(parse_journal_entry(bytes).unwrap().message, "bad \u{fffd}");
+    }
+
+    #[test]
+    fn reads_the_sender_uid() {
+        let json = br#"{"MESSAGE":"x","_COMM":"sshd","_UID":"1000","__REALTIME_TIMESTAMP":"1"}"#;
+        assert_eq!(parse_journal_entry(json).unwrap().uid, Some(1000));
+        let json = br#"{"MESSAGE":"x","_COMM":"sshd","__REALTIME_TIMESTAMP":"1"}"#;
+        assert_eq!(parse_journal_entry(json).unwrap().uid, None);
+    }
+
+    #[test]
+    fn reads_uid_min_from_login_defs() {
+        let defs = "# UID_MIN 5\nMAIL_DIR /var/mail\nUID_MIN\t\t\t 500\nUID_MAX 60000\n";
+        assert_eq!(parse_uid_min(defs), Some(500));
+        assert_eq!(parse_uid_min("UID_MAX 60000\n"), None);
+        assert_eq!(parse_uid_min("UID_MIN lots\n"), None);
     }
 
     #[test]
