@@ -1,0 +1,38 @@
+[Unit]
+Description=fwg daemon (bans addresses that fail too often)
+# Start after the firewall rules are loaded; bans live in their own table.
+After=fwg.service network.target systemd-journald.service
+Wants=fwg.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/fwgd
+ExecStartPre=/usr/sbin/fwgd --check
+Restart=on-failure
+RestartSec=5s
+
+# /var/lib/fwg (database) and /run/fwg (control socket), both 0700, owned by root.
+StateDirectory=fwg
+StateDirectoryMode=0700
+RuntimeDirectory=fwg
+RuntimeDirectoryMode=0700
+
+# fwgd reads logs and the journal, writes its own directories, and talks to
+# nftables over netlink; it needs nothing else.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

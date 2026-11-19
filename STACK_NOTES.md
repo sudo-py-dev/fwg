@@ -211,7 +211,7 @@ Five tiers. Tiers 0–3 need **no root** and run on every `cargo test`.
 | 0 | Unit tests: values, parser, rule set, rules file, nft runner, CLI logic against a fake backend, CLI binary end to end | `cargo test`, `proptest`, `assert_cmd` | ✅ |
 | 1 | Snapshots: generated nft JSON for every rule kind, the `rules.toml` format, the `status` table | `insta` | ✅ |
 | 2 | **Real nft load**: apply the generated ruleset inside an unprivileged user+network namespace, read it back with `nft -j list`, compare | `unshare -rn` (`crates/fwg-nft/tests/ruleset.rs`, `backend.rs` tests re-run themselves inside a namespace) | ✅ every scenario loads, twice, without duplicating the table |
-| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` (firewall, 28 checks) and `crates/fwg-nft/tests/netns/ban_traffic.sh` (bans, 9 checks), sharing `tests/netns/harness.sh`; run by `cargo test` (~7 s each) | ✅ breaking `limit` or the ban rule on purpose makes them fail |
+| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` (firewall, 28 checks) and `crates/fwg-nft/tests/netns/ban_traffic.sh` (bans, 9 checks) sharing `tests/netns/harness.sh`, and `fwgd/tests/netns/daemon.sh` (daemon end to end, 21 checks); run by `cargo test` (~7 s each) | ✅ breaking `limit` or the ban rule on purpose makes them fail |
 | 4 | **Full system**: systemd unit, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft | `vm/smoke-test.sh` (fresh VM each run, ~8 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules back after reboot |
 | 5 | CI: fmt, clippy, all tests with `FWG_REQUIRE_NETNS=1` (never skip), MSRV 1.89 check, `cargo-deny` | `.github/workflows/ci.yml`, `deny.toml` | ✅ set up |
 
@@ -273,10 +273,10 @@ fwg/
 │   ├── fwg-nft/          # typed nft JSON schema, ruleset builder, `Backend` trait + `nft` runner
 │   ├── fwg-store/        # (Phase 2) `Store` trait + Turso implementation
 │   ├── fwg-watch/        # filters, jails, failure tracking (log sources: 2c)
-│   └── fwg-ipc/          # (Phase 2) socket protocol types
+│   └── fwg-ipc/          # control socket protocol (JSON lines)
 ├── fwg/                  # CLI binary (clap + anyhow)
 │   └── tests/netns/      # tier 3: firewall traffic checks
-├── fwgd/                 # (Phase 2) daemon binary (tokio + anyhow)
+├── fwgd/                 # daemon binary (tokio + anyhow)
 ├── filters/              # shipped clean-room filters (TOML)
 ├── tests/netns/          # tier 3: shared namespace harness and probe tool
 ├── vm/                   # tier 4: test VMs and the smoke test
@@ -325,7 +325,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | 2b ✅ | Filters (TOML: `description`, `programs`, `failures`, `ignore`; patterns must be anchored `^…$` and have exactly one `<HOST>`), jails (`log`, `max_retry` 5, `find_time` 10m, `ban_time` 1h, optional doubling up to `ban_time_max` 1w, `ignore`), sliding-window tracker (bounded, evicts the oldest tenth when full), `Watcher` tying them together. Pure logic. Clean-room `filters/sshd.toml` from OpenSSH message formats — **to verify against real sshd output in the VM (2f)**. | `fwg-watch` |
 | 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
 | 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. | `fwg-store` |
-| 2e | `fwgd`: wiring, control socket, systemd unit, restore active bans at start. | `fwgd` |
+| 2e ✅ | `fwgd`: loads jails (local filters override shipped ones), opens the DB, creates the ban table and restores running bans, then one loop handles log events, control requests (`status`, `banned`, `ban`, `unban`), saving journal cursors every 5 s and pruning history older than 90 d. Repeat offences counted over 30 d. Sources run on threads; SIGTERM saves cursors, stops them and removes the socket. Socket `0600` in a `0700` dir, peer uid checked, one request per connection, 1 MiB / 5 s limits. `dist/fwgd.service` (`systemd-analyze security`: 4.1 OK). | `fwgd`, `fwg-ipc` |
 | 2f | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`. VM test: a real SSH brute force from the host gets banned. | `fwg` |
 
 Decisions:
