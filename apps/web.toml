@@ -1,0 +1,31 @@
+# Web servers. Names follow the profiles ufw users know.
+
+["Nginx HTTP"]
+title = "Web server (HTTP)"
+description = "Nginx, plain HTTP."
+ports = ["80/tcp"]
+
+["Nginx HTTPS"]
+title = "Web server (HTTPS)"
+description = "Nginx, HTTPS over TCP and HTTP/3 (QUIC) over UDP."
+ports = ["443/tcp", "443/udp"]
+
+["Nginx Full"]
+title = "Web server (HTTP, HTTPS)"
+description = "Nginx, HTTP and HTTPS, including HTTP/3 (QUIC) over UDP."
+ports = ["80,443/tcp", "443/udp"]
+
+[Apache]
+title = "Web server (HTTP)"
+description = "Apache httpd, plain HTTP."
+ports = ["80/tcp"]
+
+["Apache Secure"]
+title = "Web server (HTTPS)"
+description = "Apache httpd, HTTPS."
+ports = ["443/tcp"]
+
+["Apache Full"]
+title = "Web server (HTTP, HTTPS)"
+description = "Apache httpd, HTTP and HTTPS."
+ports = ["80,443/tcp"]
