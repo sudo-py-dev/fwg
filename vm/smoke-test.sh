@@ -70,6 +70,8 @@ run_vm() {
     sleep 3
   done
   "$VM" ssh "$name" "bash guest-checks.sh after-reboot" || failed=1
+  echo "[import]"
+  "$VM" ssh "$name" "bash guest-checks.sh import" || failed=1
   "$VM" pull "$name" sshd-capture.txt "$ROOT/vm/state/$name-sshd-capture.txt" >/dev/null || failed=1
 
   "$VM" down "$name" >/dev/null

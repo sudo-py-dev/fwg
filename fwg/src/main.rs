@@ -4,6 +4,7 @@ mod app;
 mod cli;
 mod client;
 mod daemon;
+mod import;
 mod safety;
 mod status;
 
@@ -16,7 +17,7 @@ use fwg_core::ConfigDir;
 use fwg_nft::{ActiveBan, Backend, Batch, Nft, NftError, TableRef};
 
 use crate::app::App;
-use crate::cli::{AppCmd, Cli, Cmd, JailCmd};
+use crate::cli::{AppCmd, Cli, Cmd, ImportCmd, JailCmd};
 use crate::client::Client;
 use crate::safety::Environment;
 
@@ -87,6 +88,17 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Show => app.show(out),
         Cmd::Confirm => app.confirm(out),
+        Cmd::Import {
+            from:
+                ImportCmd::Ufw {
+                    apply,
+                    from,
+                    defaults,
+                },
+        } => app.import_ufw(&from, &defaults, apply, out),
+        Cmd::Import {
+            from: ImportCmd::Fail2ban { apply, from },
+        } => app.import_fail2ban(&from, apply, out),
         Cmd::App {
             command: AppCmd::List,
         } => app.app_list(out),

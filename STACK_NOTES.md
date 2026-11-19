@@ -451,7 +451,7 @@ they switch, in PR-sized steps:
 | 3a ✅ | `fwgd --test-filter FILTER [LOG]`: runs a filter (name or file) over a log or stdin and reports failures per pattern and per address, ignored lines, lines from other programs, and the lines that matched nothing. Nothing is banned. | `fail2ban-regex`: the way filters are written and checked. Every new filter in 3c is checked with it. |
 | 3b ✅ | App profiles: `fwg app list`, `fwg app info NAME`, `fwg allow OpenSSH` and ufw's `… to any app NAME`, also for `insert`/`delete`. Profiles are TOML tables (`title`, `description`, `ports = ["80,443/tcp", "443/udp"]`) in `/usr/share/fwg/apps/` (shipped, from `apps/`) and `/etc/fwg/apps/` (local; the first of a name wins, any case). A rule is expanded when added — one rule per port entry — and keeps the profile name as a label shown by `status` (`80,443/tcp (Nginx Full)`); like ufw, editing a profile later does not change existing rules. Profiles are only read when a rule names one (a name never starts with a digit, ports always do), so an unreadable profile directory cannot break `fwg allow 22`. `delete allow 22/tcp` also finds a labelled rule. | `ufw allow OpenSSH`, `ufw app list`. |
 | 3c ✅ | Filters `dovecot`, `postfix-sasl` and `nginx-http-auth`, written from real output of each program in both VMs and tested against it (`crates/fwg-watch/tests/service_filters.rs`), with example jails (`enabled = false`) in `dist/jails.d`. Filters can now say `format = "plain"` to match whole lines of a program's own log file (nginx's `access.log`). The VM test attacks each real server from its own address and expects the ban. Findings in §9.3. | fail2ban's most used jails after sshd. |
-| 3d | `fwg import ufw` (reads `/etc/ufw/user.rules`/`user6.rules`, the rules ufw itself wrote) and `fwg import fail2ban` (reads `jail.local` / `jail.d/*.local`: which jails are enabled, `maxretry`, `findtime`, `bantime`, `ignoreip`; never fail2ban's regexes, which stay clean-room). Both show what they would do and change nothing without `--apply`. | Moving an existing machine over without retyping its setup. |
+| 3d ✅ | `fwg import ufw` and `fwg import fail2ban` (crate `fwg-import`), dry run unless `--apply`. ufw: each `### tuple ###` line of `user.rules`/`user6.rules` becomes fwg rule words checked by the normal parser; rules for both IP versions are kept once, IPv6-only ones stay in place relative to the shared ones; policies from `/etc/default/ufw`, logging from `ufw.conf`; route rules and protocols other than TCP/UDP are listed as not imported, and ufw's FORWARD DROP is explained, not imported (it would stop Docker, §4). fail2ban: `jail.conf` < `jail.d/*.conf` < `jail.local` < `jail.d/*.local`, key by key, read the way fail2ban 1.0.2 reads them (§9.4); only the enabled jails fwg has filters for, only `maxretry`, `findtime`, `bantime`, `bantime.increment`/`maxtime`, `ignoreip`; values over fwg's limits are clamped with a note; written to a new `jails.d/imported-fail2ban.toml`, never over a file, and a jail already in `jails.d` is shown, not overwritten. Verified in both VMs against ufw's and fail2ban's own reports (`ufw show added`, `fail2ban-client -d`). | Moving an existing machine over without retyping its setup. |
 | 3e | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, example jail as a conffile), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |
 
 Decided against for now:
@@ -484,6 +484,22 @@ counted line, and `ruser=`/`user=` are attacker text), Dovecot's `no auth attemp
 
 Dovecot logs through its log process, so its `_COMM` is the generic `log`; that is only
 safe because journal entries from login users are dropped (§5).
+
+### 9.4 How ufw and fail2ban store their settings (verified 2026-11-19, ufw 0.36.2, fail2ban 1.0.2)
+
+- ufw writes one `### tuple ### ACTION PROTO DPORT DST SPORT SRC [DAPP SAPP] DIR[_IFACE] [comment=HEX]`
+  line per rule; route rules are `route:ACTION … in_IF!out_IF`; logged rules have actions
+  like `allow_log`. Rules without addresses appear in both `user.rules` and `user6.rules`.
+  `ufw show added` lists rules in the order they were added, which the files do not record:
+  fwg places IPv6-only rules after the last shared rule they follow, which filters the same.
+- fail2ban: `key = value` or `key: value`; `;` after whitespace starts an inline comment but
+  `#` does not (`maxretry = 4 # x` is invalid to fail2ban itself); indented lines continue a
+  value; `%(name)s` refers to a key of the same section or `[DEFAULT]`; `ignoreip` entries are
+  split on spaces, commas and line breaks. `fail2ban-client -d` prints the effective settings
+  and is the reference the VM test compares against.
+- fail2ban's own `nginx-http-auth` reads `error.log`, which §9.3 shows can be forged; the
+  importer points the jail at `access.log`. `recidive` has no fwg counterpart
+  (`ban_time_increment` does the job per jail).
 
 ## 10. Licence
 

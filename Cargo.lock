@@ -325,6 +325,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fwg-core",
+ "fwg-import",
  "fwg-ipc",
  "fwg-nft",
  "fwg-watch",
@@ -343,6 +344,17 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "fwg-import"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "fwg-core",
+ "fwg-watch",
+ "ipnet",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

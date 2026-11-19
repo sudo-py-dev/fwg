@@ -144,6 +144,11 @@ pub enum Cmd {
     },
     /// List banned addresses and the time left (asks fwgd).
     Banned,
+    /// Show what an existing ufw or fail2ban setup would become; `--apply` imports it.
+    Import {
+        #[command(subcommand)]
+        from: ImportCmd,
+    },
     /// List and show application profiles (`fwg allow OpenSSH`).
     App {
         #[command(subcommand)]
@@ -153,6 +158,32 @@ pub enum Cmd {
     Jail {
         #[command(subcommand)]
         command: JailCmd,
+    },
+}
+
+/// `fwg import` sources.
+#[derive(Debug, Subcommand)]
+pub enum ImportCmd {
+    /// ufw's rules, default policies and logging.
+    Ufw {
+        /// Add them (otherwise only show them).
+        #[arg(long)]
+        apply: bool,
+        /// ufw's configuration directory.
+        #[arg(long, value_name = "DIR", default_value = "/etc/ufw")]
+        from: PathBuf,
+        /// ufw's default policies.
+        #[arg(long, value_name = "FILE", default_value = "/etc/default/ufw")]
+        defaults: PathBuf,
+    },
+    /// fail2ban's jail settings, for the jails fwg has filters for.
+    Fail2ban {
+        /// Write them to jails.d/imported-fail2ban.toml (otherwise only show them).
+        #[arg(long)]
+        apply: bool,
+        /// fail2ban's configuration directory.
+        #[arg(long, value_name = "DIR", default_value = "/etc/fail2ban")]
+        from: PathBuf,
     },
 }
 
@@ -286,6 +317,9 @@ impl Cmd {
                 | Self::Delete { .. }
                 | Self::Default { .. }
                 | Self::Logging { .. }
+                | Self::Import {
+                    from: ImportCmd::Ufw { apply: true, .. }
+                }
         )
     }
 }
