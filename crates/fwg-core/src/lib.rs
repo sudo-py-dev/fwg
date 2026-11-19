@@ -14,6 +14,7 @@ pub use ruleset::{
     Added, Defaults, FORMAT_VERSION, Policy, RoutedPolicy, RuleNumber, RuleSet, RuleSetError,
 };
 pub use store::{
-    ConfigDir, DEFAULT_CONFIG_DIR, MAX_RULES_FILE_BYTES, ReadGuard, StoreError, WriteGuard,
+    ConfigDir, DEFAULT_CONFIG_DIR, MAX_RULES_FILE_BYTES, PendingChange, ReadGuard, StoreError,
+    WriteGuard,
 };
 pub use value::{Address, Comment, Family, Interface, PortRange, Ports, Protocol, ValueError};
