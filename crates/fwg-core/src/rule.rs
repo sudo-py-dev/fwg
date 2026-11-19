@@ -4,6 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::app::AppName;
 use crate::value::{Address, Comment, Interface, Ports, Protocol};
 
 /// What happens to traffic that matches a rule.
@@ -114,6 +115,9 @@ pub struct RuleParts {
     pub to_port: Option<Ports>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<Comment>,
+    /// The application profile the ports came from (a label; the ports are above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<AppName>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
@@ -132,6 +136,7 @@ pub struct Rule {
     from: Endpoint,
     to: Endpoint,
     comment: Option<Comment>,
+    app: Option<AppName>,
 }
 
 /// Error from converting [`RuleParts`] into a [`Rule`].
@@ -172,6 +177,7 @@ impl TryFrom<RuleParts> for Rule {
                 ports: p.to_port,
             },
             comment: p.comment,
+            app: p.app,
         })
     }
 }
@@ -188,6 +194,7 @@ impl From<Rule> for RuleParts {
             to: r.to.addr,
             to_port: r.to.ports,
             comment: r.comment,
+            app: r.app,
         }
     }
 }
@@ -233,6 +240,26 @@ impl Rule {
     #[must_use]
     pub const fn comment(&self) -> Option<&Comment> {
         self.comment.as_ref()
+    }
+
+    /// The application profile the rule was made from, if any.
+    #[must_use]
+    pub const fn app(&self) -> Option<&AppName> {
+        self.app.as_ref()
+    }
+
+    /// The same rule labelled as made from profile `app`.
+    #[must_use]
+    pub fn with_app(mut self, app: AppName) -> Self {
+        self.app = Some(app);
+        self
+    }
+
+    /// The same rule without the profile label.
+    #[must_use]
+    pub fn without_app(mut self) -> Self {
+        self.app = None;
+        self
     }
 
     /// Whether this rule lets new incoming TCP connections reach `port`.
