@@ -26,6 +26,15 @@ Every change is applied atomically: the kernel gets the whole new ruleset or not
 `fwg enable` refuses to run (unless `--force`) when it would block new SSH logins, or
 when ufw or firewalld is also active.
 
+Any change can be made on trial with `--confirm SECS`: unless you run `fwg confirm`
+in time, `fwgd` puts the previous rules back, so a rule that cuts off your SSH session
+undoes itself. `fwg rollback` undoes it at once.
+
+```bash
+sudo fwg --confirm 60 default deny incoming
+sudo fwg confirm                      # from a new SSH login, to show it still works
+```
+
 Run `fwg --help` for all commands.
 
 ## Banning (`fwgd`)

@@ -49,6 +49,7 @@ If a decision changes, update this file in the same commit.
 |---|---|---|---|
 | `/etc/fwg/fwg.toml` | **Human** (CLI never rewrites it) | TOML | (Phase 2) daemon settings. Not needed in Phase 1: everything there is CLI-managed state in `rules.toml`. |
 | `/etc/fwg/rules.toml` | **CLI** (`fwg allow …` writes it) | TOML | Firewall rules + default policies + enabled flag. Has `version = 1` for future migrations and a "managed by fwg" header. Hand edits are allowed but comments are not preserved. |
+| `/etc/fwg/pending.toml` | **CLI** (written by `--confirm`), removed by `fwg confirm`/`rollback` or by fwgd at the deadline | TOML | (Phase 2) the rules before an unconfirmed change, and its deadline |
 | `/etc/fwg/jails.d/*.toml` | Human | TOML | (Phase 2) jail definitions |
 | `/usr/share/fwg/filters/*.toml` | Package | TOML | (Phase 2) shipped clean-room filters |
 | `/etc/fwg/filters/*.toml` | Human | TOML | (Phase 2) local filter overrides, same name wins |
@@ -211,8 +212,8 @@ Five tiers. Tiers 0–3 need **no root** and run on every `cargo test`.
 | 0 | Unit tests: values, parser, rule set, rules file, nft runner, CLI logic against a fake backend, CLI binary end to end | `cargo test`, `proptest`, `assert_cmd` | ✅ |
 | 1 | Snapshots: generated nft JSON for every rule kind, the `rules.toml` format, the `status` table | `insta` | ✅ |
 | 2 | **Real nft load**: apply the generated ruleset inside an unprivileged user+network namespace, read it back with `nft -j list`, compare | `unshare -rn` (`crates/fwg-nft/tests/ruleset.rs`, `backend.rs` tests re-run themselves inside a namespace) | ✅ every scenario loads, twice, without duplicating the table |
-| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` (firewall, 28 checks) and `crates/fwg-nft/tests/netns/ban_traffic.sh` (bans, 9 checks) sharing `tests/netns/harness.sh`, and `fwgd/tests/netns/daemon.sh` (daemon end to end with the real `fwg` CLI as client, 33 checks); run by `cargo test` (~7 s each) | ✅ breaking `limit`, the ban rule or `fwg unban` on purpose makes them fail |
-| 4 | **Full system**: systemd units, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft, real SSH brute force banned by `fwgd` | `vm/smoke-test.sh` (fresh VM each run, ~12 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules and bans back after reboot |
+| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` (firewall, 28 checks) and `crates/fwg-nft/tests/netns/ban_traffic.sh` (bans, 9 checks) sharing `tests/netns/harness.sh`, and `fwgd/tests/netns/daemon.sh` (daemon end to end with the real `fwg` CLI as client, incl. `--confirm`, 48 checks, ~25 s); run by `cargo test` (~7 s each) | ✅ breaking `limit`, the ban rule or `fwg unban` on purpose makes them fail |
+| 4 | **Full system**: systemd units, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft, real SSH brute force banned by `fwgd`, `--confirm` undoing a real SSH lockout | `vm/smoke-test.sh` (fresh VM each run, ~12 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules and bans back after reboot |
 | 5 | CI: fmt, clippy, all tests with `FWG_REQUIRE_NETNS=1` (never skip), MSRV 1.89 check, `cargo-deny` | `.github/workflows/ci.yml`, `deny.toml` | ✅ set up |
 
 Available for traffic tests: `ip`, `tc` (latency/loss injection), `socat`, `nc`, `python3`.
@@ -257,6 +258,9 @@ separate machine with its own kernel — breaking its firewall costs nothing.
   `10.0.2.2`, and banning that would cut off the harness's own SSH.
 - `fwg-vm up` checks the cloud-init packages are really installed: when apt cannot
   reach the mirror, cloud-init still reports `done` with no errors (seen once on Debian).
+- Keep the host awake during a smoke test: a host suspend pauses the VM and leaves
+  its clock behind until the reboot step re-reads the RTC, which makes restored bans
+  look expired.
 - On Debian, `/usr/sbin` is not in a normal user's `PATH`; fwg finds `nft` through its
   fixed path list (§4), so this does not matter.
 
@@ -314,7 +318,8 @@ Safety in Phase 1:
   table) is active, unless `--force` — two firewalls both filter every packet.
 - Every change is loaded into the kernel first and saved only if that worked; if saving
   fails, the previous rules are loaded again.
-- Phase 2 adds `enable --confirm 60` (auto-rollback unless confirmed), done by the daemon.
+- Phase 2 adds `--confirm SECS` on every rule change (auto-rollback unless confirmed),
+  carried out by the daemon; see §9, step 2g.
 
 Not in Phase 1: route/forward rules (only the `routed` default policy), app profiles,
 NAT.
@@ -331,6 +336,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
 | 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. | `fwg-store` |
 | 2e ✅ | `fwgd`: loads jails (local filters override shipped ones), opens the DB, creates the ban table and restores running bans, then one loop handles log events, control requests (`status`, `banned`, `ban`, `unban`), saving journal cursors every 5 s and pruning history older than 90 d. Repeat offences counted over 30 d. Sources run on threads; SIGTERM saves cursors, stops them and removes the socket. Socket `0600` in a `0700` dir, peer uid checked, one request per connection, 1 MiB / 5 s limits. `dist/fwgd.service` (`systemd-analyze security`: 4.1 OK). | `fwgd`, `fwg-ipc` |
+| 2g ✅ | `--confirm SECS` (5–3600) on every command that changes rules, plus `fwg confirm` and `fwg rollback` — see the decision below. | `fwg-core`, `fwg-nft`, `fwg`, `fwgd` |
 | 2f ✅ | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`, over the control socket (`--socket`/`FWG_SOCKET` to override; 10 s limit to connect and again for the exchange — the connect runs on a thread because `UnixStream` has no connect timeout; plain errors for "not running" and "not root"). Example jail `dist/jails.d/sshd.toml`. VM test: failed SSH logins over IPv4 and IPv6 from a network namespace *inside* the VM get banned, shown by the CLI, lifted by `unban`, and kept across `systemctl restart fwgd` and a reboot. `filters/sshd.toml` verified against real OpenSSH output (§9.1). | `fwg`, `vm/` |
 
 Decisions:
@@ -338,6 +344,11 @@ Decisions:
 - **Kernel holds the truth for active bans.** Timeouts expire in the kernel, so a crashed
   daemon never leaves a ban stuck and never lifts one early. The DB is history plus a
   copy used to restore bans after a reboot (kernel sets are empty at boot).
+  Restoring uses each ban's end in wall-clock time, so a clock that was wrong when
+  the ban was made (or is wrong at boot) shortens or lengthens the restored ban; kernel
+  timeouts while running are not affected. Seen once in a VM whose clock fell 1.5 h
+  behind while the host was suspended: its 1 h bans were correctly treated as over
+  after the reboot.
 - **Event time:** journald's timestamp; for files, the time the line was read. fwgd only
   follows new lines (it starts at the end of a file), so read time is accurate and no
   log date parsing is needed. Reading old log backlogs is out of scope.
@@ -358,6 +369,22 @@ Decisions:
   `ban_time_max`.
 - **Control socket:** `/run/fwg/fwgd.sock`, mode `0600`, and the daemon also checks the
   peer's uid is 0 (`SO_PEERCRED` through tokio's safe API). JSON lines, one request per line.
+- **`--confirm` is carried out by fwgd, not by the CLI.** A change that blocks SSH
+  leaves open sessions running (`ct state established` is accepted first) but no way
+  back in once they drop, and a timer in the CLI would die with its session.
+  Before loading the change, the CLI saves the previous rules and a deadline (Unix
+  seconds) to `/etc/fwg/pending.toml` under the config lock; fwgd checks every second
+  (one `stat` when nothing is pending) and puts them back when the deadline passes:
+  kernel first, then `rules.toml`, and only then removes the pending file, so a refused
+  load is retried. The CLI refuses `--confirm` when fwgd does not answer. While a change
+  is pending every other change is refused, so a rollback never discards later work.
+  A deadline missed while fwgd was down is handled when it starts; `fwg reload` (boot)
+  also rolls back a change whose time is up. The fwgd unit gets write access to
+  `/etc/fwg` for this. `--confirm` takes a required number, so `fwg delete --confirm 60
+  allow 22/tcp` cannot read `allow` as the seconds; typed after the rule words it would
+  read as a rule word, so the CLI refuses it there with a hint.
+  ✅ Verified in the VMs: `fwg --confirm 20 delete allow 22/tcp` over SSH blocked new
+  logins from the host, and fwgd let them back in after the deadline.
 - **Config:** jails in `/etc/fwg/jails.d/*.toml` (human-owned, never rewritten); shipped
   filters in `/usr/share/fwg/filters/`, local overrides in `/etc/fwg/filters/`.
   `fwgd --check` validates everything without starting.
