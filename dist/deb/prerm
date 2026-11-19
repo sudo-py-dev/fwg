@@ -1,0 +1,7 @@
+#!/bin/sh
+# Stop the unit for removal. An upgrade restarts it after unpacking.
+set -e
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke stop @PACKAGE@.service >/dev/null
+fi

@@ -85,7 +85,29 @@ Only settings are imported: fwg keeps its own filters. Whatever cannot be import
 Then turn the old tool off (`ufw disable`, `systemctl disable --now fail2ban`) so only
 one of them filters and bans.
 
-## Install from source
+## Install Debian packages
+
+Build the packages on Ubuntu 24.04 for Debian 13 and Ubuntu 24.04 on amd64.
+The build needs Rust 1.89+, a C compiler, `binutils`, `dpkg-dev` and the usual
+Debian package tools.
+
+```bash
+dist/build-debs.sh
+sudo apt install ./target/deb/fwg_*.deb ./target/deb/fwgd_*.deb
+```
+
+APT enables and starts both units. On a fresh install, the firewall stays disabled
+until you run `sudo fwg enable`. The daemon starts with the `sshd` jail enabled.
+Edit the other jail files under `/etc/fwg/jails.d/` to opt in.
+
+To uninstall, run `sudo fwg disable` while the CLI is still installed to clear
+the firewall table, then run `sudo apt remove fwgd fwg`. Existing daemon bans
+can remain in the kernel until their timeouts expire or the machine reboots.
+Remove preserves configuration and ban history. Purging `fwgd` deletes the
+shipped jail conffiles and ban database. Purge both packages to delete all of
+`/etc/fwg`.
+
+### Install from source
 
 Requires Rust 1.89+ and the `nftables` package.
 

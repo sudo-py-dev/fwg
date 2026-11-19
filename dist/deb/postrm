@@ -1,0 +1,24 @@
+#!/bin/sh
+# Keep shared configuration until both packages have been purged.
+set -e
+
+case "$1" in
+    remove)
+        deb-systemd-helper mask @PACKAGE@.service >/dev/null
+        ;;
+    purge)
+        deb-systemd-helper purge @PACKAGE@.service >/dev/null
+        deb-systemd-helper unmask @PACKAGE@.service >/dev/null
+
+        other_status=$(dpkg-query -W -f='${db:Status-Status}' @OTHER@ 2>/dev/null || true)
+        case "$other_status" in
+            ''|not-installed) rm -rf /etc/fwg ;;
+        esac
+        if [ '@PACKAGE@' = fwgd ]; then
+            rm -rf /var/lib/fwg
+        fi
+        ;;
+esac
+if [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload
+fi

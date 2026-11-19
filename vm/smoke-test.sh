@@ -19,22 +19,19 @@ REBOOT_TIMEOUT_SECS=180
 run_vm() {
   local name="$1"
   echo "=== $name"
-  "$VM" reset "$name" >/dev/null
-  "$VM" up "$name" >/dev/null
-  for f in "$ROOT/target/release/fwg" "$ROOT/target/release/fwgd" "$ROOT/dist/fwg.service" \
-           "$ROOT/dist/fwgd.service" "$ROOT/vm/guest-checks.sh"; do
-    "$VM" push "$name" "$f" >/dev/null
+  "$VM" reset "$name" >/dev/null || return
+  "$VM" up "$name" || return
+  "$VM" push "$name" "$ROOT/vm/guest-checks.sh" >/dev/null || return
+  "$VM" ssh "$name" 'mkdir -p packages old-packages' || return
+  for f in "$packages"/*.deb; do
+    "$VM" push "$name" "$f" packages/ >/dev/null || return
   done
-  # Both are called sshd.toml; guest-checks.sh installs them under that name.
-  "$VM" push "$name" "$ROOT/filters/sshd.toml" sshd-filter.toml >/dev/null
-  "$VM" push "$name" "$ROOT/dist/jails.d/sshd.toml" sshd-jail.toml >/dev/null
-  "$VM" ssh "$name" 'mkdir -p apps filters jails' >/dev/null
-  for f in "$ROOT"/apps/*.toml; do "$VM" push "$name" "$f" apps/ >/dev/null; done
-  for f in "$ROOT"/filters/*.toml; do "$VM" push "$name" "$f" filters/ >/dev/null; done
-  for f in "$ROOT"/dist/jails.d/*.toml; do "$VM" push "$name" "$f" jails/ >/dev/null; done
+  for f in "$packages"/old/*.deb; do
+    "$VM" push "$name" "$f" old-packages/ >/dev/null || return
+  done
 
   local failed=0
-  for phase in install enable rules ufw sshd-capture fwgd-install bans services confirm-keep; do
+  for phase in sshd-capture install enable rules ufw fwgd-install bans services confirm-keep; do
     echo "[$phase]"
     "$VM" ssh "$name" "bash guest-checks.sh $phase" || failed=1
   done
@@ -74,11 +71,22 @@ run_vm() {
   "$VM" ssh "$name" "bash guest-checks.sh import" || failed=1
   "$VM" pull "$name" sshd-capture.txt "$ROOT/vm/state/$name-sshd-capture.txt" >/dev/null || failed=1
 
+  echo "[package upgrade, remove and purge]"
+  "$VM" ssh "$name" 'bash guest-checks.sh lifecycle' || failed=1
   "$VM" down "$name" >/dev/null
   return "$failed"
 }
 
-cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" -p fwg -p fwgd
+if [[ -n "${FWG_SMOKE_PACKAGES:-}" ]]; then
+  packages="$FWG_SMOKE_PACKAGES"
+else
+  packages=$(mktemp -d)
+  trap 'rm -rf "$packages"' EXIT
+  "$ROOT/dist/build-debs.sh" "$packages"
+  # This is the first package release. Use an earlier version of the same build
+  # to exercise dpkg's upgrade path until a real predecessor is available.
+  FWG_DEB_VERSION='0.1.0~alpha.1~upgrade-test' "$ROOT/dist/build-debs.sh" "$packages/old"
+fi
 
 vms=("$@")
 (( ${#vms[@]} )) || vms=(debian ubuntu)

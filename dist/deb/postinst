@@ -1,0 +1,22 @@
+#!/bin/sh
+# Enable systemd units on first install while preserving administrator choices.
+set -e
+
+if [ "$1" = configure ]; then
+    deb-systemd-helper unmask @PACKAGE@.service >/dev/null
+    if deb-systemd-helper was-enabled @PACKAGE@.service; then
+        deb-systemd-helper enable @PACKAGE@.service >/dev/null
+    else
+        deb-systemd-helper update-state @PACKAGE@.service >/dev/null
+    fi
+
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload
+        action=start
+        if [ -n "${2:-}" ]; then
+            action=restart
+        fi
+        # This respects policy-rc.d. fwg.service only reloads saved rules.
+        deb-systemd-invoke "$action" @PACKAGE@.service >/dev/null
+    fi
+fi
