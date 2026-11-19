@@ -1,0 +1,5 @@
+# Local fuzzing inputs, crash artifacts and build outputs.
+/corpus/
+/artifacts/
+/coverage/
+/target/

@@ -242,8 +242,8 @@ inside the test VMs).
 
 Optional local dev tools (`cargo install`): `cargo-nextest`, `cargo-insta` (reviewing
 snapshots; `INSTA_UPDATE=always cargo test` works without it), `cargo-deny` (CI runs it),
-`cargo-llvm-cov`. `cargo-fuzz` also needs a nightly toolchain — only for fuzzing the log
-parsers, Phase 2.
+`cargo-llvm-cov`. The [parser fuzz targets](fuzz/README.md) run with `cargo-fuzz`
+and nightly Rust in a separate test workspace.
 
 **Safety rule:** never run `sudo fwg enable` on the dev machine. Real-root testing happens
 in the VM (tier 4) or CI only.

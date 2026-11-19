@@ -1,0 +1,39 @@
+# Nightly parser fuzz targets, isolated from application builds and the stable CI workspace.
+[package]
+name = "fwg-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+fwg-core = { path = "../crates/fwg-core" }
+fwg-watch = { path = "../crates/fwg-watch" }
+libfuzzer-sys = "=0.4.10"
+
+[[bin]]
+name = "rules"
+path = "fuzz_targets/rules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal"
+path = "fuzz_targets/journal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "syslog"
+path = "fuzz_targets/syslog.rs"
+test = false
+doc = false
+bench = false

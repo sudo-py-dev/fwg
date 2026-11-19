@@ -331,6 +331,9 @@ mod tests {
             "from 192.0.2.7",
             "to 10.1.2.3/16",
             "proto tcp",
+            "from any",
+            "out proto any",
+            "to any comment everywhere",
         ];
         for action in [Action::Allow, Action::Deny, Action::Reject] {
             for input in inputs {

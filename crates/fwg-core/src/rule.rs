@@ -297,6 +297,7 @@ impl Rule {
         if self.direction == Direction::Out {
             args.push("out".to_owned());
         }
+        let criteria_start = args.len();
         if let Some(iface) = &self.interface {
             args.extend(["on".to_owned(), iface.to_string()]);
         }
@@ -317,6 +318,11 @@ impl Rule {
             }
             push_endpoint(&mut args, "from", &self.from);
             push_endpoint(&mut args, "to", &self.to);
+        }
+        // A rule that matches everything (`from any`, `proto any`) has no criterion
+        // left to print, and an empty rule does not parse: say `from any`.
+        if args.len() == criteria_start {
+            args.extend(["from".to_owned(), "any".to_owned()]);
         }
         args
     }
