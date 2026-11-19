@@ -9,7 +9,11 @@
 //! ignore = []
 //! ```
 //!
-//! Patterns match the log *message* (without the syslog or journal prefix).
+//! Patterns match the log *message* (without the syslog or journal prefix). A filter
+//! for a program with its own log format (nginx's `access.log`) says
+//! `format = "plain"`: its patterns match whole lines of a log file, it names no
+//! programs, and it cannot be used with the journal.
+//!
 //! `<HOST>` stands for the source address. Log messages contain text an attacker
 //! controls (user names, client versions), so every pattern must be anchored with
 //! `^` and `$`: an unanchored pattern could match an address the attacker typed,
@@ -43,6 +47,9 @@ pub enum FilterError {
     /// `programs` is empty.
     #[error("filter lists no programs")]
     NoPrograms,
+    /// A `plain` filter lists programs, which plain log lines do not have.
+    #[error("a `plain` filter matches whole lines and must not list programs")]
+    PlainWithPrograms,
     /// A pattern is not anchored with `^` and `$`.
     #[error("pattern must start with `^` and end with `$`: {0}")]
     NotAnchored(String),
@@ -63,10 +70,24 @@ pub enum FilterError {
     },
 }
 
+/// What the lines a filter reads look like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineFormat {
+    /// Journal entries or syslog lines: a program name and a message.
+    #[default]
+    Syslog,
+    /// A program's own log file, matched line by line (e.g. nginx `access.log`).
+    Plain,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FilterFile {
     description: String,
+    #[serde(default)]
+    format: LineFormat,
+    #[serde(default)]
     programs: Vec<String>,
     failures: Vec<String>,
     #[serde(default)]
@@ -78,6 +99,7 @@ struct FilterFile {
 pub struct Filter {
     name: String,
     description: String,
+    format: LineFormat,
     programs: Vec<String>,
     failures: Vec<Regex>,
     /// The failure patterns as written, for reports (`fwgd --test-filter`).
@@ -116,12 +138,15 @@ impl Filter {
         if file.failures.is_empty() {
             return Err(FilterError::NoFailures);
         }
-        if file.programs.is_empty() {
-            return Err(FilterError::NoPrograms);
+        match (file.format, file.programs.is_empty()) {
+            (LineFormat::Syslog, true) => return Err(FilterError::NoPrograms),
+            (LineFormat::Plain, false) => return Err(FilterError::PlainWithPrograms),
+            _ => {}
         }
         Ok(Self {
             name: name.to_owned(),
             description: file.description,
+            format: file.format,
             programs: file.programs,
             failures: file
                 .failures
@@ -155,10 +180,17 @@ impl Filter {
         &self.programs
     }
 
-    /// Whether messages from `program` (syslog tag or journal identifier) are for this filter.
+    /// Whether messages from `program` (syslog tag or journal identifier) are for this
+    /// filter. A `plain` filter takes every line: its lines name no program.
     #[must_use]
     pub fn handles_program(&self, program: &str) -> bool {
-        self.programs.iter().any(|p| p == program)
+        self.format == LineFormat::Plain || self.programs.iter().any(|p| p == program)
+    }
+
+    /// What the lines it reads look like.
+    #[must_use]
+    pub const fn format(&self) -> LineFormat {
+        self.format
     }
 
     /// The source address of a failure in `message`, if it is one.
@@ -333,6 +365,28 @@ mod tests {
         );
         let line = format!("first {}", "1".repeat(MAX_LINE_BYTES));
         assert_eq!(f.classify(&line), Verdict::TooLong);
+    }
+
+    #[test]
+    fn plain_filters_take_whole_lines_and_no_programs() {
+        let text = "description = \"web\"\nformat = \"plain\"\nfailures = ['^<HOST> - .+ 401$']\n";
+        let f = Filter::from_toml("web", text).unwrap();
+        assert_eq!(f.format(), LineFormat::Plain);
+        assert!(f.handles_program("") && f.handles_program("anything"));
+        assert!(f.failure_source("192.0.2.7 - x 401").is_some());
+
+        let with_programs = format!("{text}programs = [\"nginx\"]\n");
+        assert!(matches!(
+            Filter::from_toml("web", &with_programs),
+            Err(FilterError::PlainWithPrograms)
+        ));
+        let no_programs = text.replace("format = \"plain\"\n", "");
+        assert!(matches!(
+            Filter::from_toml("web", &no_programs),
+            Err(FilterError::NoPrograms)
+        ));
+        let bad_format = text.replace("plain", "json");
+        assert!(Filter::from_toml("web", &bad_format).is_err());
     }
 
     #[test]

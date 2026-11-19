@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::io::{self, BufRead};
 use std::net::IpAddr;
 
-use fwg_watch::{Filter, MAX_LINE_BYTES, Verdict, parse_syslog_line};
+use fwg_watch::{Filter, LineFormat, MAX_LINE_BYTES, Verdict, parse_syslog_line};
 
 /// Lines that matched nothing, shown without `--verbose`.
 const SHOWN_UNMATCHED: usize = 10;
@@ -56,7 +56,11 @@ pub fn check(filter: &Filter, mut input: impl BufRead) -> io::Result<Report> {
         report.lines += 1;
         let line = String::from_utf8_lossy(&buf);
         let line = line.trim_end_matches(['\n', '\r']);
-        let message = match parse_syslog_line(line) {
+        let parsed = match filter.format() {
+            LineFormat::Plain => None,
+            LineFormat::Syslog => parse_syslog_line(line),
+        };
+        let message = match parsed {
             Some(parsed) if !filter.handles_program(parsed.program) => {
                 report.other_program += 1;
                 continue;
@@ -87,7 +91,12 @@ pub fn render(filter: &Filter, source: &str, report: &Report, verbose: bool) -> 
         filter.description()
     );
     let _ = writeln!(out, "From:     {source}");
-    let _ = writeln!(out, "Programs: {}", filter.programs().join(", "));
+    match filter.format() {
+        LineFormat::Syslog => {
+            let _ = writeln!(out, "Programs: {}", filter.programs().join(", "));
+        }
+        LineFormat::Plain => out.push_str("Format:   plain (whole lines of a log file)\n"),
+    }
     out.push('\n');
     let _ = writeln!(out, "Lines read:     {:>6}", report.lines);
     let _ = writeln!(
