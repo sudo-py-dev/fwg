@@ -46,7 +46,9 @@ stop() { kill -TERM "$pid"; STATUS=0; wait "$pid" || STATUS=$?; pid=""; }
 ask() { python3 -I -c 'import socket,sys
 s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.argv[2].encode()+b"\n")
 print(s.makefile().readline().strip())' "$SOCK" "$1"; }
-fwg() { "$FWG" --socket "$SOCK" "$@" 2>&1; }
+fwg() { "$FWG" --socket "$SOCK" --config-dir "$WORK/etc" "$@" 2>&1; }
+fwg_loaded() { nft list tables | grep -c '^table inet fwg$' || true; }
+has_ssh_rule() { nft list table inet fwg 2>/dev/null | grep -c 'tcp dport 22 accept' || true; }
 failed_login() { echo "$(date -u +%Y-%m-%dT%H:%M:%S.000000+00:00) testhost sshd[$RANDOM]: Invalid user admin from $1 port 22" >> "$LOG"; }
 banned() { nft list set inet fwg_ban ban4 2>/dev/null | grep -c "$1" || true; }
 wait_banned() { for _ in $(seq 40); do [[ "$(banned "$1")" == 1 ]] && break; sleep 0.1; done; banned "$1"; }
@@ -92,6 +94,37 @@ check "unbanned address left the kernel" 0 "$(banned 203.0.113.9)"
 check "unbanned address left the list" 0 "$(fwg banned | grep -c 203.0.113.9 || true)"
 check "loopback ban refused" 1 "$(fwg ban 127.0.0.1 | grep -c 'fwg: fwgd: refusing')"
 check "bad ban time refused" 1 "$(fwg ban 203.0.113.9 --time 400d | grep -c 'fwg: fwgd: ')"
+
+echo "fwg --confirm (fwgd undoes unconfirmed changes)"
+check "enable --confirm" 1 "$(fwg --confirm 5 enable --force | grep -c 'Run `fwg confirm` within 5 s')"
+check "change is live" 1 "$(fwg_loaded)"
+check "pending change saved" yes "$([[ -f "$WORK/etc/pending.toml" ]] && echo yes || echo no)"
+check "other changes refused while pending" 1 "$(fwg allow 80/tcp | grep -c 'rolls back in')"
+sleep 6.5
+check "unconfirmed enable undone: table gone" 0 "$(fwg_loaded)"
+check "unconfirmed enable undone: saved as disabled" 1 "$(grep -c '^enabled = false' "$WORK/etc/rules.toml")"
+check "pending change removed" no "$([[ -f "$WORK/etc/pending.toml" ]] && echo yes || echo no)"
+check "fwgd logged the rollback" 1 "$(grep -c 'not confirmed in time' "$WORK/fwgd.log")"
+
+fwg allow 22/tcp >/dev/null
+fwg enable --force >/dev/null
+check "rule loaded" 1 "$(has_ssh_rule)"
+fwg --confirm 5 delete allow 22/tcp >/dev/null
+check "--confirm delete is live" 0 "$(has_ssh_rule)"
+check "fwg confirm" "Change confirmed; it stays." "$(fwg confirm)"
+sleep 6.5
+check "confirmed change stays" 0 "$(has_ssh_rule)"
+
+fwg allow 22/tcp >/dev/null
+fwg --confirm 5 delete allow 22/tcp >/dev/null
+stop                                   # fwgd is down when the deadline passes
+sleep 6
+check "rule still gone while fwgd is down" 0 "$(has_ssh_rule)"
+start
+sleep 1.5
+check "fwgd rolls back a missed deadline at start" 1 "$(has_ssh_rule)"
+check "the rules file has the rule back" 1 "$(grep -c '^to_port = "22"$' "$WORK/etc/rules.toml")"
+fwg disable >/dev/null
 
 echo "restart after a reboot"
 stop

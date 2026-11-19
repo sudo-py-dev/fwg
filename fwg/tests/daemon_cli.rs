@@ -197,3 +197,70 @@ fn socket_comes_from_the_environment_too() {
     );
     assert!(out.contains("192.0.2.7"), "{out}");
 }
+
+#[test]
+fn confirm_checks_fwgd_runs_before_changing_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("fwg");
+    let err = stderr_of_failure(
+        Command::cargo_bin("fwg")
+            .unwrap()
+            .arg("--config-dir")
+            .arg(&config)
+            .arg("--socket")
+            .arg(dir.path().join("none.sock"))
+            .args(["--confirm", "30", "allow", "22/tcp"]),
+    );
+    assert!(
+        err.starts_with(
+            "fwg: --confirm needs fwgd running to undo the change: fwgd is not running"
+        ),
+        "{err}"
+    );
+    assert!(!config.join("rules.toml").exists(), "nothing may change");
+}
+
+#[test]
+fn confirm_with_fwgd_leaves_a_pending_change() {
+    let fake = FakeDaemon::start(daemon);
+    let config = fake.dir.path().join("fwg");
+    let fwg = |args: &[&str]| {
+        let mut cmd = fake.fwg();
+        cmd.arg("--config-dir").arg(&config).args(args);
+        cmd
+    };
+    let out = stdout(&mut fwg(&["--confirm", "30", "allow", "80/tcp"]));
+    assert!(out.contains("Run `fwg confirm` within 30 s"), "{out}");
+    assert!(config.join("pending.toml").exists());
+    assert_eq!(
+        fake.requests(),
+        ["{\"cmd\":\"status\"}\n"],
+        "one check that fwgd runs"
+    );
+
+    let err = stderr_of_failure(&mut fwg(&["allow", "443/tcp"]));
+    assert!(err.contains("rolls back in"), "{err}");
+    assert_eq!(
+        stdout(&mut fwg(&["confirm"])),
+        "Change confirmed; it stays.\n"
+    );
+    assert!(!config.join("pending.toml").exists());
+}
+
+#[test]
+fn confirm_is_refused_where_it_does_not_apply() {
+    let fake = FakeDaemon::start(daemon);
+    let err = stderr_of_failure(fake.fwg().args(["--confirm", "30", "banned"]));
+    assert_eq!(
+        err,
+        "fwg: --confirm only applies to commands that change the rules\n"
+    );
+    let err = stderr_of_failure(
+        fake.fwg()
+            .args(["delete", "allow", "22/tcp", "--confirm", "30"]),
+    );
+    assert!(err.contains("put --confirm before the rule"), "{err}");
+    let err = stderr_of_failure(fake.fwg().args(["--confirm", "2", "enable"]));
+    assert!(err.contains("5..=3600"), "{err}");
+    assert_eq!(fake.requests(), Vec::<String>::new());
+}

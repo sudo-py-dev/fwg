@@ -7,6 +7,10 @@
 #   guest-checks.sh sshd-capture    record what this OpenSSH logs for each kind of failure
 #   guest-checks.sh fwgd-install    install fwgd, its unit, the sshd filter and jail
 #   guest-checks.sh bans            failed SSH logins get banned; fwg ban/unban/banned/jail
+#   guest-checks.sh confirm-keep    a confirmed --confirm change stays
+#   guest-checks.sh confirm-lockout delete the SSH rule with --confirm (the host then checks
+#                                   new logins fail, and work again after the rollback)
+#   guest-checks.sh confirm-after   the rollback put the SSH rule back
 #   guest-checks.sh after-reboot    rules and bans came back at boot
 #
 # The SSH "attacker" is a network namespace inside this VM (10.200.0.0/24), never
@@ -204,6 +208,24 @@ case "${1:-}" in
     check "manual ban listed as manual" listed 192.0.2.50 manual
     check "no fwgd errors" bash -c '! sudo journalctl -u fwgd.service -p err --no-pager -q | grep -q .'
     ;;
+  confirm-keep)
+    check "--confirm change" contains "$(sudo fwg --confirm 5 allow 8080/tcp)" "Run \`fwg confirm\` within 5 s"
+    check "status shows it pending" contains "$(sudo fwg status)" "rolls back in"
+    check "fwg confirm" contains "$(sudo fwg confirm)" "Change confirmed"
+    sleep 7
+    check "confirmed change stays" contains "$(sudo fwg status)" "8080/tcp"
+    sudo fwg delete allow 8080/tcp >/dev/null
+    ;;
+  confirm-lockout)
+    check "--confirm delete of the SSH rule" contains "$(sudo fwg --confirm 20 delete allow 22/tcp)" "within 20 s"
+    check "SSH rule gone from the kernel" not bash -c "sudo nft list table inet fwg | grep -q 'tcp dport 22 accept'"
+    ;;
+  confirm-after)
+    check "SSH rule back in the kernel" bash -c "sudo nft list table inet fwg | grep -q 'tcp dport 22 accept'"
+    check "SSH rule back in the rules file" contains "$(sudo fwg status)" "22/tcp"
+    check "nothing pending" not test -e /etc/fwg/pending.toml
+    check "fwgd logged the rollback" bash -c "sudo journalctl -u fwgd.service --no-pager -q | grep -q 'not confirmed in time'"
+    ;;
   after-reboot)
     check "unit active after boot" systemctl is-active fwg.service
     check "rules loaded at boot" fwg_loaded
@@ -221,7 +243,7 @@ case "${1:-}" in
     check "no fwgd errors in journal" bash -c '! sudo journalctl -b -u fwgd.service -p err --no-pager -q | grep -q .'
     ;;
   *)
-    echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|after-reboot" >&2
+    echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|confirm-keep|confirm-lockout|confirm-after|after-reboot" >&2
     exit 2
     ;;
 esac

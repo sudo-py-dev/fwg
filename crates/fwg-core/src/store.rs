@@ -1,4 +1,5 @@
-//! Reading and writing the rules file (`rules.toml`) safely.
+//! Reading and writing the rules file (`rules.toml`) safely, and the pending
+//! change file (`pending.toml`) used by `--confirm`.
 //!
 //! - Every access holds a lock on `<dir>/.lock`, so concurrent `fwg` runs
 //!   never lose each other's changes. Writing requires the exclusive lock,
@@ -11,6 +12,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 use crate::ruleset::{FORMAT_VERSION, RuleSet};
 
 /// Default configuration directory.
@@ -19,11 +22,26 @@ pub const DEFAULT_CONFIG_DIR: &str = "/etc/fwg";
 pub const MAX_RULES_FILE_BYTES: u64 = 1024 * 1024;
 
 const RULES_FILE: &str = "rules.toml";
+const PENDING_FILE: &str = "pending.toml";
 const LOCK_FILE: &str = ".lock";
 const DIR_MODE: u32 = 0o750;
 const FILE_MODE: u32 = 0o640;
 const HEADER: &str = "# Managed by fwg. Change it with the `fwg` command.\n\
                       # Hand edits are allowed, but comments are not kept.\n\n";
+const PENDING_HEADER: &str = "# Managed by fwg: a change made with --confirm.\n\
+                              # Unless `fwg confirm` runs before the deadline, fwgd puts\n\
+                              # the previous rules below back.\n\n";
+
+/// A change made with `--confirm`: rolled back to `previous` at `deadline` unless
+/// confirmed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingChange {
+    /// When it is rolled back, in seconds since the Unix epoch.
+    pub deadline: u64,
+    /// The rules to go back to.
+    pub previous: RuleSet,
+}
 
 /// Error reading or writing the configuration.
 #[derive(Debug, thiserror::Error)]
@@ -101,6 +119,19 @@ impl ConfigDir {
         self.path.join(RULES_FILE)
     }
 
+    /// Path of the pending change file.
+    #[must_use]
+    pub fn pending_path(&self) -> PathBuf {
+        self.path.join(PENDING_FILE)
+    }
+
+    /// Whether a change waits for confirmation. A quick check without the lock,
+    /// for polling; read the change itself through a guard.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        self.pending_path().exists()
+    }
+
     /// Locks for reading (shared with other readers).
     ///
     /// # Errors
@@ -168,21 +199,69 @@ impl ReadGuard {
     /// If the file cannot be read, is too large, has an unknown version or is invalid.
     pub fn load(&self) -> Result<RuleSet, StoreError> {
         let path = self.dir.rules_path();
-        let file = match File::open(&path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(RuleSet::default()),
-            Err(e) => return Err(StoreError::io("open", &path)(e)),
-        };
-        let mut text = String::new();
-        // Read one byte past the limit to detect oversized files without trusting metadata.
-        file.take(MAX_RULES_FILE_BYTES + 1)
-            .read_to_string(&mut text)
-            .map_err(StoreError::io("read", &path))?;
-        if text.len() as u64 > MAX_RULES_FILE_BYTES {
-            return Err(StoreError::TooLarge { path });
+        match read_limited(&path)? {
+            Some(text) => parse(&text, &path),
+            None => Ok(RuleSet::default()),
         }
-        parse(&text, &path)
     }
+
+    /// The change waiting for confirmation, if any.
+    ///
+    /// # Errors
+    /// If the file cannot be read or is invalid.
+    pub fn pending(&self) -> Result<Option<PendingChange>, StoreError> {
+        let path = self.dir.pending_path();
+        let Some(text) = read_limited(&path)? else {
+            return Ok(None);
+        };
+        let parse_err = |source| StoreError::Parse {
+            path: path.clone(),
+            source: Box::new(source),
+        };
+        let mut table: toml::Table = text.parse().map_err(parse_err)?;
+        // The previous rules go through the same version check as rules.toml.
+        let previous = match table.remove("previous") {
+            Some(toml::Value::Table(previous)) => check_and_convert(previous, &path)?,
+            _ => {
+                return Err(StoreError::Parse {
+                    path: path.clone(),
+                    source: Box::new(serde::de::Error::missing_field("previous")),
+                });
+            }
+        };
+        let rest: PendingRest = toml::Value::Table(table).try_into().map_err(parse_err)?;
+        Ok(Some(PendingChange {
+            deadline: rest.deadline,
+            previous,
+        }))
+    }
+}
+
+/// The rest of `pending.toml` once `previous` is taken out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingRest {
+    deadline: u64,
+}
+
+/// Reads a file of at most [`MAX_RULES_FILE_BYTES`]; `None` if it does not exist.
+fn read_limited(path: &Path) -> Result<Option<String>, StoreError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(StoreError::io("open", path)(e)),
+    };
+    let mut text = String::new();
+    // Read one byte past the limit to detect oversized files without trusting metadata.
+    file.take(MAX_RULES_FILE_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(StoreError::io("read", path))?;
+    if text.len() as u64 > MAX_RULES_FILE_BYTES {
+        return Err(StoreError::TooLarge {
+            path: path.to_owned(),
+        });
+    }
+    Ok(Some(text))
 }
 
 /// Exclusive lock on the configuration; allows loading and saving.
@@ -230,10 +309,40 @@ impl WriteGuard {
     /// # Errors
     /// If any step of the write fails; the old file is then left untouched.
     pub fn save(&self, rules: &RuleSet) -> Result<(), StoreError> {
-        let dir = self.read.dir.path();
-        let path = self.read.dir.rules_path();
         let text = format!("{HEADER}{}", toml::to_string_pretty(rules)?);
+        self.write_atomic(&self.read.dir.rules_path(), &text)
+    }
 
+    /// Atomically writes the pending change file.
+    ///
+    /// # Errors
+    /// If any step of the write fails.
+    pub fn save_pending(&self, pending: &PendingChange) -> Result<(), StoreError> {
+        let text = format!("{PENDING_HEADER}{}", toml::to_string_pretty(pending)?);
+        self.write_atomic(&self.read.dir.pending_path(), &text)
+    }
+
+    /// Removes the pending change file; returns whether there was one.
+    ///
+    /// # Errors
+    /// If it exists but cannot be removed.
+    pub fn clear_pending(&self) -> Result<bool, StoreError> {
+        let path = self.read.dir.pending_path();
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(StoreError::io("remove", &path)(e)),
+        }
+        let dir = self.read.dir.path();
+        File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(StoreError::io("sync", dir))?;
+        Ok(true)
+    }
+
+    /// Temp file in the same directory, `fsync`, rename, `fsync` the directory.
+    fn write_atomic(&self, path: &Path, text: &str) -> Result<(), StoreError> {
+        let dir = self.read.dir.path();
         let mut tmp = tempfile::Builder::new()
             .prefix(".rules.")
             .suffix(".tmp")
@@ -245,8 +354,8 @@ impl WriteGuard {
         tmp.as_file()
             .sync_all()
             .map_err(StoreError::io("sync", tmp.path()))?;
-        tmp.persist(&path)
-            .map_err(|e| StoreError::io("replace", &path)(e.error))?;
+        tmp.persist(path)
+            .map_err(|e| StoreError::io("replace", path)(e.error))?;
         // Make the rename itself durable.
         File::open(dir)
             .and_then(|d| d.sync_all())
@@ -262,6 +371,15 @@ fn parse(text: &str, path: &Path) -> Result<RuleSet, StoreError> {
         source: Box::new(source),
     };
     let table: toml::Table = text.parse().map_err(parse_err)?;
+    check_and_convert(table, path)
+}
+
+/// Checks the format version of a rules table, then converts the rest.
+fn check_and_convert(table: toml::Table, path: &Path) -> Result<RuleSet, StoreError> {
+    let parse_err = |source| StoreError::Parse {
+        path: path.to_owned(),
+        source: Box::new(source),
+    };
     match table.get("version").and_then(toml::Value::as_integer) {
         Some(v) if v == i64::from(FORMAT_VERSION) => {}
         Some(found) => {
@@ -418,5 +536,66 @@ mod tests {
         );
         drop(guard);
         assert!(lock.try_lock_shared().is_ok());
+    }
+
+    #[test]
+    fn pending_change_round_trip() {
+        let (_tmp, config) = dir();
+        let guard = config.write().unwrap();
+        assert_eq!(guard.pending().unwrap(), None);
+        assert!(!config.has_pending());
+
+        let pending = PendingChange {
+            deadline: 1_800_000_060,
+            previous: sample(),
+        };
+        guard.save_pending(&pending).unwrap();
+        assert!(config.has_pending());
+        assert_eq!(guard.pending().unwrap(), Some(pending));
+        assert_eq!(
+            fs::metadata(config.pending_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            FILE_MODE
+        );
+        let text = fs::read_to_string(config.pending_path()).unwrap();
+        assert!(
+            text.starts_with("# Managed by fwg: a change made with --confirm."),
+            "{text}"
+        );
+
+        assert!(guard.clear_pending().unwrap());
+        assert!(
+            !guard.clear_pending().unwrap(),
+            "second clear finds nothing"
+        );
+        assert_eq!(guard.pending().unwrap(), None);
+    }
+
+    #[test]
+    fn rejects_bad_pending_files() {
+        let (_tmp, config) = dir();
+        let guard = config.write().unwrap();
+        for (text, expected) in [
+            ("deadline = 5\n", "invalid rules file"),
+            (
+                "deadline = 5\nextra = 1\n[previous]\nversion = 1\n",
+                "invalid rules file",
+            ),
+            (
+                "deadline = 5\n[previous]\nversion = 99\n",
+                "format version 99",
+            ),
+            (
+                "deadline = -1\n[previous]\nversion = 1\n",
+                "invalid rules file",
+            ),
+        ] {
+            fs::write(config.pending_path(), text).unwrap();
+            let err = guard.pending().unwrap_err().to_string();
+            assert!(err.contains(expected), "{text:?}: {err}");
+        }
     }
 }

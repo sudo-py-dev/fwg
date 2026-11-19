@@ -3,6 +3,7 @@
 mod backend;
 mod ban;
 mod build;
+mod rollback;
 mod schema;
 
 pub use backend::{ActiveBan, Backend, NFT_PATHS, Nft, NftError, TableRef};
@@ -11,4 +12,5 @@ pub use ban::{
     unban,
 };
 pub use build::{TABLE, build, teardown};
+pub use rollback::{RollbackError, roll_back, roll_back_if_due, unix_now};
 pub use schema::Batch;

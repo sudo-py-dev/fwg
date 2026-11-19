@@ -3,14 +3,21 @@
 //! Every change follows one order: edit a copy of the rules, load it into the
 //! kernel (if the firewall is on), and only then save it. If loading fails the
 //! file is untouched; if saving fails the previous rules are loaded again.
+//!
+//! With `--confirm`, the previous rules are saved as a pending change first;
+//! `fwgd` loads them back at the deadline unless `fwg confirm` runs. While a
+//! change is pending, other changes are refused, so a rollback never discards
+//! work done after it.
 
 use std::fmt::Write as _;
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
-use fwg_core::{Action, Added, ConfigDir, RuleNumber, RuleSet, WriteGuard, parse_rule};
-use fwg_nft::{Backend, build, teardown};
+use fwg_core::{
+    Action, Added, ConfigDir, PendingChange, RuleNumber, RuleSet, WriteGuard, parse_rule,
+};
+use fwg_nft::{Backend, build, roll_back, roll_back_if_due, teardown, unix_now};
 
 use crate::cli::{ActionArg, PolicyArg, Toggle, TrafficArg};
 use crate::safety::{Environment, hazards};
@@ -21,6 +28,8 @@ pub struct App<B> {
     config: ConfigDir,
     backend: B,
     env: Environment,
+    /// Seconds a change waits for `fwg confirm` (`--confirm`).
+    confirm: Option<u64>,
 }
 
 impl<B: Backend> App<B> {
@@ -30,12 +39,20 @@ impl<B: Backend> App<B> {
             config,
             backend,
             env,
+            confirm: None,
         }
+    }
+
+    /// Makes changes roll back after `secs` unless confirmed.
+    #[must_use]
+    pub const fn with_confirm(mut self, secs: Option<u64>) -> Self {
+        self.confirm = secs;
+        self
     }
 
     /// `fwg enable`.
     pub fn enable(&self, force: bool, out: &mut dyn Write) -> Result<()> {
-        let guard = self.config.write()?;
+        let guard = self.write()?;
         let old = guard.load()?;
         let tables = self.backend.tables()?;
         if !force {
@@ -46,7 +63,8 @@ impl<B: Backend> App<B> {
                     s
                 });
                 bail!(
-                    "not enabling the firewall:{list}\nUse `fwg enable --force` to enable anyway."
+                    "not enabling the firewall:{list}\nUse `fwg enable --force` to enable anyway \
+                     (add `--confirm 60` to have it undone in 60 s unless you run `fwg confirm`)."
                 );
             }
         }
@@ -54,12 +72,13 @@ impl<B: Backend> App<B> {
         new.enabled = true;
         self.commit(&guard, &old, &new)?;
         writeln!(out, "Firewall is active.")?;
+        self.confirm_hint(out)?;
         Ok(())
     }
 
     /// `fwg disable`.
     pub fn disable(&self, out: &mut dyn Write) -> Result<()> {
-        let guard = self.config.write()?;
+        let guard = self.write()?;
         let mut set = guard.load()?;
         self.backend.apply(&teardown())?;
         if set.enabled {
@@ -72,6 +91,13 @@ impl<B: Backend> App<B> {
 
     /// `fwg reload`: load what the rules file says (used at boot).
     pub fn reload(&self, out: &mut dyn Write) -> Result<()> {
+        // At boot fwgd may not run yet; a change whose time is up goes back now.
+        if roll_back_if_due(&self.config, &self.backend, unix_now())? {
+            writeln!(
+                out,
+                "An unconfirmed change timed out; the previous rules are back."
+            )?;
+        }
         let guard = self.config.read()?;
         let set = guard.load()?;
         if set.enabled {
@@ -90,9 +116,36 @@ impl<B: Backend> App<B> {
 
     /// `fwg status`.
     pub fn status(&self, verbose: bool, numbered: bool, out: &mut dyn Write) -> Result<()> {
-        let set = self.config.read()?.load()?;
+        let guard = self.config.read()?;
+        let set = guard.load()?;
+        let pending = guard.pending()?;
+        drop(guard);
         let loaded = self.backend.is_loaded()?;
+        if let Some(pending) = pending {
+            writeln!(out, "{}", pending_note(&pending, unix_now()))?;
+        }
         write!(out, "{}", status::render(&set, loaded, verbose, numbered))?;
+        Ok(())
+    }
+
+    /// `fwg confirm`: keep the pending change.
+    pub fn confirm(&self, out: &mut dyn Write) -> Result<()> {
+        let guard = self.config.write()?;
+        if !guard.clear_pending()? {
+            bail!("no change is waiting for confirmation");
+        }
+        writeln!(out, "Change confirmed; it stays.")?;
+        Ok(())
+    }
+
+    /// `fwg rollback`: undo the pending change now.
+    pub fn rollback(&self, out: &mut dyn Write) -> Result<()> {
+        let guard = self.config.write()?;
+        let Some(pending) = guard.pending()? else {
+            bail!("no change is waiting for confirmation, so there is nothing to roll back");
+        };
+        roll_back(&guard, &self.backend, &pending)?;
+        writeln!(out, "Rolled back to the rules from before the change.")?;
         Ok(())
     }
 
@@ -198,7 +251,7 @@ impl<B: Backend> App<B> {
 
     /// `fwg reset`: unload, back up, and start from defaults.
     pub fn reset(&self, out: &mut dyn Write) -> Result<()> {
-        let guard = self.config.write()?;
+        let guard = self.write()?;
         let backup = guard.backup()?;
         self.backend.apply(&teardown())?;
         guard.save(&RuleSet::default())?;
@@ -222,7 +275,7 @@ impl<B: Backend> App<B> {
         out: &mut dyn Write,
         edit: impl FnOnce(&mut RuleSet) -> Result<String>,
     ) -> Result<()> {
-        let guard = self.config.write()?;
+        let guard = self.write()?;
         let old = guard.load()?;
         let mut new = old.clone();
         let message = edit(&mut new)?;
@@ -234,11 +287,55 @@ impl<B: Backend> App<B> {
         if changed && !new.enabled {
             writeln!(out, "The firewall is off; run `fwg enable` to apply.")?;
         }
+        if changed {
+            self.confirm_hint(out)?;
+        } else if self.confirm.is_some() {
+            writeln!(out, "Nothing changed, so there is nothing to confirm.")?;
+        }
+        Ok(())
+    }
+
+    /// The write lock, refused while a change waits for confirmation.
+    fn write(&self) -> Result<WriteGuard> {
+        let guard = self.config.write()?;
+        if let Some(pending) = guard.pending()? {
+            bail!(
+                "{}\nRun `fwg confirm` to keep it or `fwg rollback` to undo it, then try again.",
+                pending_note(&pending, unix_now())
+            );
+        }
+        Ok(guard)
+    }
+
+    fn confirm_hint(&self, out: &mut dyn Write) -> Result<()> {
+        if let Some(secs) = self.confirm {
+            writeln!(
+                out,
+                "Run `fwg confirm` within {secs} s to keep this change; otherwise fwgd undoes it."
+            )?;
+        }
         Ok(())
     }
 
     /// Loads `new` into the kernel (when enabled), then saves it.
     fn commit(&self, guard: &WriteGuard, old: &RuleSet, new: &RuleSet) -> Result<()> {
+        // Saved before the change is loaded: if this process dies (say, with the
+        // SSH session it just cut off), fwgd still knows what to put back.
+        if let Some(secs) = self.confirm {
+            guard.save_pending(&PendingChange {
+                deadline: unix_now() + secs,
+                previous: old.clone(),
+            })?;
+        }
+        let result = self.load_and_save(guard, old, new);
+        if result.is_err() && self.confirm.is_some() {
+            // Nothing changed, so nothing is left to roll back.
+            let _ = guard.clear_pending();
+        }
+        result
+    }
+
+    fn load_and_save(&self, guard: &WriteGuard, old: &RuleSet, new: &RuleSet) -> Result<()> {
         if new.enabled {
             self.backend
                 .apply(&build(new))
@@ -257,6 +354,18 @@ impl<B: Backend> App<B> {
             return Err(err);
         }
         Ok(())
+    }
+}
+
+/// "A change … rolls back in 42 s …", for status and refusals.
+fn pending_note(pending: &PendingChange, now: u64) -> String {
+    match pending.deadline.checked_sub(now) {
+        Some(left) if left > 0 => format!(
+            "A change made with --confirm rolls back in {left} s unless you run `fwg confirm`."
+        ),
+        _ => {
+            "A change made with --confirm timed out and rolls back as soon as fwgd runs.".to_owned()
+        }
     }
 }
 
@@ -505,5 +614,142 @@ mod tests {
         assert!(out.contains("[ 1] 22/tcp"), "{out}");
         let json = h.run(|a, o| a.show(o)).unwrap();
         assert!(json.contains("\"nftables\""));
+    }
+
+    fn pending_of(h: &Harness) -> Option<PendingChange> {
+        h.app.config.read().unwrap().pending().unwrap()
+    }
+
+    /// An enabled firewall that allows SSH, as a starting point.
+    fn with_ssh() -> Harness {
+        let h = Harness::new(Environment::default());
+        h.run(|a, o| a.add(Action::Allow, &words("22/tcp"), o))
+            .unwrap();
+        h.run(|a, o| a.enable(false, o)).unwrap();
+        h
+    }
+
+    #[test]
+    fn confirm_saves_the_previous_rules_first() {
+        let mut h = with_ssh();
+        let before = h.rules();
+        h.app.confirm = Some(30);
+        let started = unix_now();
+        let out = h.run(|a, o| a.delete(&words("allow 22/tcp"), o)).unwrap();
+        assert!(out.contains("Run `fwg confirm` within 30 s"), "{out}");
+
+        let pending = pending_of(&h).unwrap();
+        assert_eq!(pending.previous, before);
+        assert!((started + 30..=unix_now() + 30).contains(&pending.deadline));
+        // The change itself is live, both loaded and saved.
+        assert_eq!(h.rules().rules().len(), 0);
+        assert_eq!(h.last_applied(), Some(build(&h.rules())));
+
+        let out = h.run(|a, o| a.confirm(o)).unwrap();
+        assert_eq!(out, "Change confirmed; it stays.\n");
+        assert_eq!(pending_of(&h), None);
+        assert_eq!(h.rules().rules().len(), 0);
+        let err = h.run(|a, o| a.confirm(o)).unwrap_err().to_string();
+        assert!(err.contains("no change is waiting"), "{err}");
+    }
+
+    #[test]
+    fn changes_are_refused_while_one_is_pending() {
+        let mut h = with_ssh();
+        h.app.confirm = Some(30);
+        h.run(|a, o| a.add(Action::Allow, &words("80/tcp"), o))
+            .unwrap();
+        h.app.confirm = None;
+        for result in [
+            h.run(|a, o| a.add(Action::Allow, &words("443/tcp"), o)),
+            h.run(|a, o| a.delete(&words("1"), o)),
+            h.run(|a, o| a.disable(o)),
+            h.run(|a, o| a.reset(o)),
+            h.run(|a, o| a.enable(false, o)),
+        ] {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("rolls back in"), "{err}");
+            assert!(err.contains("`fwg rollback`"), "{err}");
+        }
+        assert_eq!(h.rules().rules().len(), 2, "nothing changed");
+        let out = h.run(|a, o| a.status(false, false, o)).unwrap();
+        assert!(
+            out.starts_with("A change made with --confirm rolls back in "),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn rollback_puts_the_previous_rules_back() {
+        let mut h = with_ssh();
+        let before = h.rules();
+        h.app.confirm = Some(30);
+        h.run(|a, o| a.default_policy(PolicyArg::Reject, TrafficArg::Incoming, o))
+            .unwrap();
+        assert_ne!(h.rules(), before);
+
+        let out = h.run(|a, o| a.rollback(o)).unwrap();
+        assert!(out.starts_with("Rolled back"), "{out}");
+        assert_eq!(h.rules(), before);
+        assert_eq!(h.last_applied(), Some(build(&before)));
+        assert_eq!(pending_of(&h), None);
+        let err = h.run(|a, o| a.rollback(o)).unwrap_err().to_string();
+        assert!(err.contains("nothing to roll back"), "{err}");
+    }
+
+    #[test]
+    fn rolling_back_an_enable_turns_the_firewall_off() {
+        let mut h = Harness::new(Environment::default());
+        h.app.confirm = Some(30);
+        h.run(|a, o| a.enable(false, o)).unwrap();
+        assert!(h.rules().enabled);
+        h.run(|a, o| a.rollback(o)).unwrap();
+        assert!(!h.rules().enabled);
+        assert_eq!(h.last_applied(), Some(teardown()));
+    }
+
+    #[test]
+    fn failed_change_leaves_nothing_pending() {
+        let mut h = with_ssh();
+        h.app.confirm = Some(30);
+        h.app.backend.fail.set(true);
+        assert!(
+            h.run(|a, o| a.add(Action::Allow, &words("80/tcp"), o))
+                .is_err()
+        );
+        assert_eq!(pending_of(&h), None);
+    }
+
+    #[test]
+    fn no_change_means_nothing_to_confirm() {
+        let mut h = with_ssh();
+        h.app.confirm = Some(30);
+        let out = h
+            .run(|a, o| a.add(Action::Allow, &words("22/tcp"), o))
+            .unwrap();
+        assert!(out.contains("nothing to confirm"), "{out}");
+        assert_eq!(pending_of(&h), None);
+    }
+
+    #[test]
+    fn reload_rolls_back_a_change_whose_time_is_up() {
+        let mut h = with_ssh();
+        let before = h.rules();
+        h.app.confirm = Some(30);
+        h.run(|a, o| a.delete(&words("1"), o)).unwrap();
+        // Not due yet: reload keeps the change (fwgd rolls it back at the deadline).
+        h.run(|a, o| a.reload(o)).unwrap();
+        assert_eq!(h.rules().rules().len(), 0);
+
+        // As after a reboot that outlasted the deadline.
+        let guard = h.app.config.write().unwrap();
+        let mut late = guard.pending().unwrap().unwrap();
+        late.deadline = unix_now() - 1;
+        guard.save_pending(&late).unwrap();
+        drop(guard);
+        let out = h.run(|a, o| a.reload(o)).unwrap();
+        assert!(out.starts_with("An unconfirmed change timed out"), "{out}");
+        assert_eq!(h.rules(), before);
+        assert_eq!(h.last_applied(), Some(build(&before)));
     }
 }
