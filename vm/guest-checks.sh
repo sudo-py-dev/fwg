@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Runs inside a test VM as the `fwg` user (over SSH); vm/smoke-test.sh drives it.
-#   guest-checks.sh install         install binary + unit, check a fresh boot-time reload
+#   guest-checks.sh install         install both packages and verify their units start
 #   guest-checks.sh enable          SSH lockout guard, then enable with SSH allowed
 #   guest-checks.sh rules           every rule kind loads on this distro's nft
 #   guest-checks.sh ufw             refuses to run alongside ufw (skipped if absent)
 #   guest-checks.sh sshd-capture    record what this OpenSSH logs for each kind of failure
-#   guest-checks.sh fwgd-install    install fwgd, its unit, the sshd filter and jail
+#   guest-checks.sh fwgd-install    check fwgd and the shipped jails
 #   guest-checks.sh bans            failed SSH logins get banned; fwg ban/unban/banned/jail
 #   guest-checks.sh services        nginx, Dovecot and Postfix jails ban real failed logins
 #   guest-checks.sh confirm-keep    a confirmed --confirm change stays
@@ -15,6 +15,8 @@
 #   guest-checks.sh after-reboot    rules and bans came back at boot
 #   guest-checks.sh import          fwg import ufw/fail2ban agree with what ufw and
 #                                   fail2ban themselves report
+#   guest-checks.sh lifecycle       verify package upgrades, removal and purge
+#   guest-checks.sh lintian         inspect package metadata and contents
 #
 # The SSH "attacker" is a network namespace inside this VM (10.200.0.0/24), never
 # the host: host connections arrive from 10.0.2.2, and banning that address would
@@ -40,7 +42,7 @@ readonly SERVER=10.200.0.1 SERVER6=fd20::1
 readonly ASKPASS=/tmp/fwg-wrong-password
 in_kernel() { sudo nft list set inet fwg_ban "ban$([[ $1 == *:* ]] && echo 6 || echo 4)" | grep -wF -- "$1" >/dev/null; }
 not() { ! "$@"; }
-listed() { sudo fwg banned | awk -v addr="$1" -v jail="$2" '$1 == addr && $2 == jail {found = 1} END {exit !found}'; }
+listed() { sudo /usr/sbin/fwg banned | awk -v addr="$1" -v jail="$2" '$1 == addr && $2 == jail {found = 1} END {exit !found}'; }
 can_connect() { sudo ip netns exec attacker timeout 3 bash -c "</dev/tcp/${1:-$SERVER}/22"; }
 
 # The attacker namespace: the VM is 10.200.0.1 and fd20::1, attackers use .2 and
@@ -94,63 +96,76 @@ attack_until_banned() { # attack_until_banned ADDRESS SECONDS COMMAND...
 
 cursor() { sudo journalctl -n 0 --show-cursor -q | sed -n 's/^-- cursor: //p'; }
 
+apt_install() {
+  local attempt
+  for attempt in 1 2; do
+    if sudo apt-get -o DPkg::Lock::Timeout=300 update -q > /tmp/fwg-package-apt.log 2>&1 &&
+       sudo env DEBIAN_FRONTEND=noninteractive apt install -y -o Dpkg::Options::=--force-confold \
+         "$@" >> /tmp/fwg-package-apt.log 2>&1; then
+      return 0
+    fi
+  done
+  cat /tmp/fwg-package-apt.log >&2
+  return 1
+}
+
+package_version() {
+  dpkg-query -W -f='${Version}' "$1"
+}
+
 case "${1:-}" in
   install)
-    sudo install -m 0755 ~/fwg /usr/sbin/fwg
-    sudo install -m 0644 ~/fwg.service /etc/systemd/system/fwg.service
-    sudo install -d -m 0755 /usr/share/fwg/apps
-    sudo install -m 0644 ~/apps/*.toml /usr/share/fwg/apps/
-    sudo rm -rf /etc/fwg
-    sudo systemctl daemon-reload
-    check "unit enables" sudo systemctl enable fwg.service
-    check "unit starts with no config yet" sudo systemctl start fwg.service
-    check "unit is active" systemctl is-active fwg.service
+    apt_install ./packages/fwg_*.deb ./packages/fwgd_*.deb
+    check "firewall unit is enabled" systemctl is-enabled --quiet fwg.service
+    check "firewall unit is active" systemctl is-active fwg.service
+    check "daemon unit is enabled" systemctl is-enabled --quiet fwgd.service
+    check "daemon unit is active" systemctl is-active fwgd.service
     check "config dir created 0750" test "$(sudo stat -c %a /etc/fwg)" = 750
-    check "nothing loaded while disabled" bash -c '! sudo nft list tables | grep -q fwg'
+    check "installation leaves the firewall disabled" not fwg_loaded
     ;;
   enable)
-    out="$(sudo fwg enable 2>&1 || true)"
+    out="$(sudo /usr/sbin/fwg enable 2>&1 || true)"
     check "enable over SSH refused without an SSH rule" contains "$out" "you are connected over SSH"
     check "refusal names port 22" contains "$out" "TCP port 22"
-    check "firewall stayed off" bash -c '! sudo nft list tables | grep -q fwg'
-    sudo fwg allow 22/tcp >/dev/null
-    check "enable succeeds once SSH is allowed" sudo fwg enable
+    check "firewall stayed off" not fwg_loaded
+    sudo /usr/sbin/fwg allow 22/tcp >/dev/null
+    check "enable succeeds once SSH is allowed" sudo /usr/sbin/fwg enable
     check "table loaded" fwg_loaded
-    check "status active" contains "$(sudo fwg status)" "Status: active"
+    check "status active" contains "$(sudo /usr/sbin/fwg status)" "Status: active"
     ;;
   rules)
-    sudo fwg allow 80,443/tcp
-    sudo fwg allow 60000:61000/udp
-    sudo fwg limit 2222/tcp
-    sudo fwg reject from 192.0.2.0/24
-    sudo fwg allow from 2001:db8::/32 to any port 53
-    sudo fwg allow out on lo 9999/udp
-    sudo fwg deny in on eth0 proto tcp from 10.0.0.0/8 port 1024:65535 to 10.0.0.1 port 5432 comment 'db guard'
-    sudo fwg logging on
-    sudo fwg default reject incoming
-    check "all rule kinds load (nft $(sudo nft --version | awk '{print $2}'))" sudo fwg reload
+    sudo /usr/sbin/fwg allow 80,443/tcp
+    sudo /usr/sbin/fwg allow 60000:61000/udp
+    sudo /usr/sbin/fwg limit 2222/tcp
+    sudo /usr/sbin/fwg reject from 192.0.2.0/24
+    sudo /usr/sbin/fwg allow from 2001:db8::/32 to any port 53
+    sudo /usr/sbin/fwg allow out on lo 9999/udp
+    sudo /usr/sbin/fwg deny in on eth0 proto tcp from 10.0.0.0/8 port 1024:65535 to 10.0.0.1 port 5432 comment 'db guard'
+    sudo /usr/sbin/fwg logging on
+    sudo /usr/sbin/fwg default reject incoming
+    check "all rule kinds load (nft $(sudo nft --version | awk '{print $2}'))" sudo /usr/sbin/fwg reload
     check "limit set exists" contains "$(sudo nft list ruleset)" "set limit4_"
     check "comment kept" contains "$(sudo nft list ruleset)" 'comment "db guard"'
     check "app list shows the shipped profiles" contains "$(/usr/sbin/fwg app list)" "Nginx Full"
-    check "rule from a profile" contains "$(sudo fwg allow 'Nginx Full')" "allow 443/udp (Nginx Full)"
+    check "rule from a profile" contains "$(sudo /usr/sbin/fwg allow 'Nginx Full')" "allow 443/udp (Nginx Full)"
     check "profile rule loaded: TCP ports" contains "$(sudo nft list table inet fwg)" "tcp dport { 80, 443 } accept"
     check "profile rule loaded: UDP port" contains "$(sudo nft list table inet fwg)" "udp dport 443 accept"
-    check "status names the profile" contains "$(sudo fwg status)" "80,443/tcp (Nginx Full)"
-    check "delete by profile" contains "$(sudo fwg delete allow 'nginx full')" "deleted: allow 443/udp (Nginx Full)"
-    sudo fwg default deny incoming >/dev/null
+    check "status names the profile" contains "$(sudo /usr/sbin/fwg status)" "80,443/tcp (Nginx Full)"
+    check "delete by profile" contains "$(sudo /usr/sbin/fwg delete allow 'nginx full')" "deleted: allow 443/udp (Nginx Full)"
+    sudo /usr/sbin/fwg default deny incoming >/dev/null
     ;;
   ufw)
     if ! command -v ufw >/dev/null; then
       echo "  skip  ufw not installed"
       exit 0
     fi
-    sudo fwg disable >/dev/null
+    sudo /usr/sbin/fwg disable >/dev/null
     sudo ufw allow 22/tcp >/dev/null
     sudo ufw --force enable >/dev/null
-    out="$(sudo fwg enable 2>&1 || true)"
+    out="$(sudo /usr/sbin/fwg enable 2>&1 || true)"
     check "enable refused while ufw is on" contains "$out" "ufw is enabled"
     sudo ufw disable >/dev/null
-    check "enable works after ufw disable" sudo fwg enable
+    check "enable works after ufw disable" sudo /usr/sbin/fwg enable
     ;;
   sshd-capture)
     # Runs before fwgd is installed, so no capture attempt is cut short by a ban.
@@ -178,17 +193,11 @@ case "${1:-}" in
     check "every kind was logged" test "$(grep -v '^#' "$out" | cut -d' ' -f1 | sort -u | wc -l)" = 7
     ;;
   fwgd-install)
-    sudo install -m 0755 ~/fwgd /usr/sbin/fwgd
-    sudo install -m 0644 ~/fwgd.service /etc/systemd/system/fwgd.service
-    sudo install -D -m 0644 ~/sshd-filter.toml /usr/share/fwg/filters/sshd.toml
-    sudo install -d -m 0750 /etc/fwg/jails.d
-    sudo install -m 0644 ~/sshd-jail.toml /etc/fwg/jails.d/sshd.toml
-    sudo systemctl daemon-reload
-    check "fwgd --check accepts the shipped jail" sudo fwgd --check
-    check "fwgd unit enables and starts" sudo systemctl enable --now fwgd.service
-    sleep 1
+    check "fwgd --check accepts the shipped jails" sudo /usr/sbin/fwgd --check
     check "fwgd is active" systemctl is-active fwgd.service
-    check "jail list shows sshd on the journal" contains "$(sudo fwg jail list)" "sshd  sshd    journal"
+    check "jail list shows sshd on the journal" contains "$(sudo /usr/sbin/fwg jail list)" "sshd  sshd    journal"
+    check "only sshd is enabled out of the box" test \
+      "$(sudo /usr/sbin/fwg jail list | awk 'NR > 1 {print $1}')" = sshd
     out="$(/usr/sbin/fwg banned 2>&1 || true)"
     check "non-root user is told to use sudo" contains "$out" "run \`sudo fwg ...\`"
     ;;
@@ -197,8 +206,8 @@ case "${1:-}" in
     check "failed logins banned 10.200.0.2 (after $tries connections)" in_kernel 10.200.0.2
     check "it can no longer reach port 22" not can_connect
     check "fwg banned lists it under sshd" listed 10.200.0.2 sshd
-    check "jail status lists it" contains "$(sudo fwg jail status sshd)" "10.200.0.2"
-    check "jail status counts the ban" contains "$(sudo fwg jail status sshd)" "Bans:      1 since fwgd started"
+    check "jail status lists it" contains "$(sudo /usr/sbin/fwg jail status sshd)" "10.200.0.2"
+    check "jail status counts the ban" contains "$(sudo /usr/sbin/fwg jail status sshd)" "Bans:      1 since fwgd started"
     check "the harness address 10.0.2.2 is not banned" not in_kernel 10.0.2.2
     # A login user's copy of logger named like sshd logs with _COMM=sshd; only
     # its _UID gives it away. 8 fake failures would be enough for a ban.
@@ -212,9 +221,9 @@ case "${1:-}" in
     check "fwgd active after restart" systemctl is-active fwgd.service
     check "ban kept across restart" in_kernel 10.200.0.2
     check "fwg banned still lists it under sshd" listed 10.200.0.2 sshd
-    check "fwg unban" contains "$(sudo fwg unban 10.200.0.2)" "unbanned 10.200.0.2"
+    check "fwg unban" contains "$(sudo /usr/sbin/fwg unban 10.200.0.2)" "unbanned 10.200.0.2"
     check "unbanned: gone from the kernel" not in_kernel 10.200.0.2
-    check "unbanned: gone from fwg banned" bash -c '! sudo fwg banned | grep -qw 10.200.0.2'
+    check "unbanned: gone from fwg banned" bash -c '! sudo /usr/sbin/fwg banned | grep -qw 10.200.0.2'
     check "unbanned: can connect again" can_connect
     # Bans that must come back after the reboot: one from the jail, one by hand.
     attack_until_banned 10.200.0.3 120 with_key 10.200.0.3 fwg
@@ -224,8 +233,8 @@ case "${1:-}" in
     check "it can no longer reach port 22 over IPv6" not can_connect "$SERVER6"
     check "IPv4 from the same attacker still allowed" can_connect
     check "fwg banned lists the IPv6 address under sshd" listed fd20::2 sshd
-    check "fwg ban by hand" contains "$(sudo fwg ban 192.0.2.50 --time 2h)" "banned 192.0.2.50 for 2h"
-    check "fwg ban IPv6 by hand" contains "$(sudo fwg ban 2001:db8::50 --time 2h)" "banned 2001:db8::50 for 2h"
+    check "fwg ban by hand" contains "$(sudo /usr/sbin/fwg ban 192.0.2.50 --time 2h)" "banned 192.0.2.50 for 2h"
+    check "fwg ban IPv6 by hand" contains "$(sudo /usr/sbin/fwg ban 2001:db8::50 --time 2h)" "banned 2001:db8::50 for 2h"
     check "manual ban listed as manual" listed 192.0.2.50 manual
     check "no fwgd errors" bash -c '! sudo journalctl -u fwgd.service -p err --no-pager -q | grep -q .'
     report="$(sudo journalctl _COMM=sshd _COMM=sshd-session -o cat --no-pager | /usr/sbin/fwgd --test-filter sshd)"
@@ -267,14 +276,13 @@ case "${1:-}" in
       smtpd_sasl_auth_enable=yes smtpd_tls_auth_only=no
     sudo systemctl restart postfix
     for f in dovecot postfix-sasl nginx-http-auth; do
-      sudo install -m 0644 ~/filters/$f.toml /usr/share/fwg/filters/$f.toml
-      sed 's/^enabled = false/enabled = true/' ~/jails/$f.toml | sudo tee /etc/fwg/jails.d/$f.toml >/dev/null
+      sudo sed -i 's/^enabled = false/enabled = true/' "/etc/fwg/jails.d/$f.toml"
     done
     # The firewall is on with incoming denied: open the mail ports, by profile.
-    check "allow the mail services by profile" bash -c 'sudo fwg allow "Dovecot IMAP" && sudo fwg allow Postfix'
-    check "fwgd --check accepts the service jails" sudo fwgd --check
+    check "allow the mail services by profile" bash -c 'sudo /usr/sbin/fwg allow "Dovecot IMAP" && sudo /usr/sbin/fwg allow Postfix'
+    check "fwgd --check accepts the service jails" sudo /usr/sbin/fwgd --check
     sudo systemctl restart fwgd.service; sleep 2
-    check "jail list shows the three services" bash -c '[[ $(sudo fwg jail list | grep -cE "^(dovecot|postfix-sasl|nginx-http-auth) ") == 3 ]]'
+    check "jail list shows the three services" bash -c '[[ $(sudo /usr/sbin/fwg jail list | grep -cE "^(dovecot|postfix-sasl|nginx-http-auth) ") == 3 ]]'
     sleep 2
     attack_until_banned 10.200.0.31 60 sudo ip netns exec attacker \
       curl -s -o /dev/null --interface 10.200.0.31 -u alice:wrong http://$SERVER/
@@ -297,27 +305,27 @@ case "${1:-}" in
     check "--test-filter counts the real access.log" contains "$report" "10.200.0.31 "
     ;;
   confirm-keep)
-    check "--confirm change" contains "$(sudo fwg --confirm 5 allow 8080/tcp)" "Run \`fwg confirm\` within 5 s"
-    check "status shows it pending" contains "$(sudo fwg status)" "rolls back in"
-    check "fwg confirm" contains "$(sudo fwg confirm)" "Change confirmed"
+    check "--confirm change" contains "$(sudo /usr/sbin/fwg --confirm 5 allow 8080/tcp)" "Run \`fwg confirm\` within 5 s"
+    check "status shows it pending" contains "$(sudo /usr/sbin/fwg status)" "rolls back in"
+    check "fwg confirm" contains "$(sudo /usr/sbin/fwg confirm)" "Change confirmed"
     sleep 7
-    check "confirmed change stays" contains "$(sudo fwg status)" "8080/tcp"
-    sudo fwg delete allow 8080/tcp >/dev/null
+    check "confirmed change stays" contains "$(sudo /usr/sbin/fwg status)" "8080/tcp"
+    sudo /usr/sbin/fwg delete allow 8080/tcp >/dev/null
     ;;
   confirm-lockout)
-    check "--confirm delete of the SSH rule" contains "$(sudo fwg --confirm 20 delete allow 22/tcp)" "within 20 s"
+    check "--confirm delete of the SSH rule" contains "$(sudo /usr/sbin/fwg --confirm 20 delete allow 22/tcp)" "within 20 s"
     check "SSH rule gone from the kernel" not bash -c "sudo nft list table inet fwg | grep -q 'tcp dport 22 accept'"
     ;;
   confirm-after)
     check "SSH rule back in the kernel" bash -c "sudo nft list table inet fwg | grep -q 'tcp dport 22 accept'"
-    check "SSH rule back in the rules file" contains "$(sudo fwg status)" "22/tcp"
+    check "SSH rule back in the rules file" contains "$(sudo /usr/sbin/fwg status)" "22/tcp"
     check "nothing pending" not test -e /etc/fwg/pending.toml
     check "fwgd logged the rollback" bash -c "sudo journalctl -u fwgd.service --no-pager -q | grep -q 'not confirmed in time'"
     ;;
   after-reboot)
     check "unit active after boot" systemctl is-active fwg.service
     check "rules loaded at boot" fwg_loaded
-    check "status active" contains "$(sudo fwg status)" "Status: active"
+    check "status active" contains "$(sudo /usr/sbin/fwg status)" "Status: active"
     check "no unit errors in journal" bash -c '! sudo journalctl -b -u fwg.service -p err --no-pager -q | grep -q .'
     check "fwgd active after boot" systemctl is-active fwgd.service
     check "jail ban restored in the kernel" in_kernel 10.200.0.3
@@ -362,7 +370,7 @@ case "${1:-}" in
       sudo ufw insert 1 deny from 198.51.100.66
       sudo ufw default reject incoming
     } >/dev/null 2>&1
-    check "import ufw --apply" sudo fwg --config-dir "$cfg" import ufw --apply
+    check "import ufw --apply" sudo /usr/sbin/fwg --config-dir "$cfg" import ufw --apply
     # ufw's own list, minus the route rule fwg does not import yet.
     expected=$(sudo ufw show added | grep -c '^ufw ' || true)
     expected=$((expected - $(sudo ufw show added | grep -c '^ufw route' || true)))
@@ -373,7 +381,7 @@ case "${1:-}" in
     check "default policy imported" sudo grep -q 'incoming = "reject"' "$cfg/rules.toml"
     sudo ip netns add fwg-import 2>/dev/null || true
     check "the imported rules load into a real kernel" bash -c \
-      "sudo fwg --config-dir $cfg show | sudo ip netns exec fwg-import nft -j -f -"
+      "sudo /usr/sbin/fwg --config-dir $cfg show | sudo ip netns exec fwg-import nft -j -f -"
     sudo ip netns del fwg-import
     # fail2ban: the jail.local whose effective values fail2ban-client -d reports.
     sudo tee /etc/fail2ban/jail.local >/dev/null <<'JAILS'
@@ -404,8 +412,8 @@ bantime.maxtime = 1w
 [recidive]
 enabled = true
 JAILS
-    check "import fail2ban --apply" sudo fwg --config-dir "$cfg" import fail2ban --apply
-    check "fwgd accepts the imported jails" sudo fwgd --check --config-dir "$cfg" --filter-dir /usr/share/fwg/filters
+    check "import fail2ban --apply" sudo /usr/sbin/fwg --config-dir "$cfg" import fail2ban --apply
+    check "fwgd accepts the imported jails" sudo /usr/sbin/fwgd --check --config-dir "$cfg" --filter-dir /usr/share/fwg/filters
     sudo fail2ban-client -d > /tmp/f2b-dump 2>/dev/null
     check "imported values match fail2ban-client -d" sudo python3 -I -c '
 import ast, sys, tomllib
@@ -434,8 +442,52 @@ print("\n".join(bad)); sys.exit(1 if bad or len(fwg) != 4 else 0)
 ' "$cfg/jails.d/imported-fail2ban.toml" /tmp/f2b-dump
     check "fail2ban never started" not systemctl is-active fail2ban
     ;;
+  lifecycle)
+    # Finish the fresh-install smoke test before resetting the configuration.
+    sudo /usr/sbin/fwg disable
+    sudo apt-get purge -y fwg fwgd
+    check "purging a fresh install removes shared configuration" not sudo test -e /etc/fwg
+
+    apt_install ./old-packages/fwg_*.deb ./old-packages/fwgd_*.deb
+    old=$(package_version fwgd)
+    old_invocation=$(systemctl show -p InvocationID --value fwgd.service)
+    sudo /usr/sbin/fwg allow 22/tcp
+    sudo sh -c "printf '\n# local upgrade test\n' >> /etc/fwg/jails.d/sshd.toml"
+    jail_sum=$(sudo sha256sum /etc/fwg/jails.d/sshd.toml)
+    rules_sum=$(sudo sha256sum /etc/fwg/rules.toml)
+
+    apt_install ./packages/fwg_*.deb ./packages/fwgd_*.deb
+    version=$(dpkg-deb -f ./packages/fwgd_*.deb Version)
+    check "old package version precedes the new one" dpkg --compare-versions "$old" lt "$version"
+    check "firewall package upgraded" test "$(package_version fwg)" = "$version"
+    check "daemon package upgraded" test "$(package_version fwgd)" = "$version"
+    check "daemon service restarted" test "$(systemctl show -p InvocationID --value fwgd.service)" != "$old_invocation"
+    check "firewall service active after upgrade" systemctl is-active fwg.service
+    check "daemon service active after upgrade" systemctl is-active fwgd.service
+    check "edited jail kept on upgrade" test "$(sudo sha256sum /etc/fwg/jails.d/sshd.toml)" = "$jail_sum"
+    check "rules kept on upgrade" test "$(sudo sha256sum /etc/fwg/rules.toml)" = "$rules_sum"
+
+    sudo apt-get remove -y fwg fwgd
+    check "firewall binary removed" not test -e /usr/sbin/fwg
+    check "daemon binary removed" not test -e /usr/sbin/fwgd
+    check "firewall unit stopped on remove" not systemctl is-active fwg.service
+    check "daemon unit stopped on remove" not systemctl is-active fwgd.service
+    check "edited jail kept on remove" test "$(sudo sha256sum /etc/fwg/jails.d/sshd.toml)" = "$jail_sum"
+    check "rules kept on remove" test "$(sudo sha256sum /etc/fwg/rules.toml)" = "$rules_sum"
+
+    sudo apt-get purge -y fwgd
+    check "purging daemon removes its jail conffiles" not sudo test -e /etc/fwg/jails.d/sshd.toml
+    check "purging daemon removes its database" not sudo test -e /var/lib/fwg
+    check "purging daemon keeps the firewall's rules" test "$(sudo sha256sum /etc/fwg/rules.toml)" = "$rules_sum"
+    sudo apt-get purge -y fwg
+    check "purging the last package removes /etc/fwg" not sudo test -e /etc/fwg
+    ;;
+  lintian)
+    apt_install lintian
+    lintian ./packages/fwg_*.deb ./packages/fwgd_*.deb
+    ;;
   *)
-    echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|confirm-keep|confirm-lockout|confirm-after|after-reboot" >&2
+    echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|confirm-keep|confirm-lockout|confirm-after|after-reboot|import|lifecycle|lintian" >&2
     exit 2
     ;;
 esac

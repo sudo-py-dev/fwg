@@ -166,9 +166,10 @@ No crate is added without a line in this table.
   newest release more than two weeks old (0.42.0 and 0.43.0 were days old).
 - **Bundled SQLite** (compiled from the C source in `libsqlite3-sys`, which needs a C
   compiler at build time) rather than the system `libsqlite3`: one known SQLite on every
-  distro, and no `libsqlite3-dev` needed to build. The cost: SQLite fixes arrive with an
-  fwg rebuild, not with apt. Low risk here (fwg runs only its own fixed SQL on its own
-  file); **revisit in 3e**, where linking the system library is the Debian way.
+  distro, and no `libsqlite3-dev` needed to build. Step 3e keeps this build for
+  the alpha packages so they use the same SQLite as the source build and tests.
+  System SQLite fixes from apt do not update this copy. Update the pinned dependency
+  and rebuild the packages when bundled SQLite needs a fix.
 - Same SQLite file format and schema (v1) as before, so the database file is unchanged.
 - Durability: WAL journal with `synchronous = FULL` (a returned commit survives power
   loss; `NORMAL` may lose the last ones), 5 s busy timeout. A unit test checks both.
@@ -452,7 +453,7 @@ they switch, in PR-sized steps:
 | 3b ✅ | App profiles: `fwg app list`, `fwg app info NAME`, `fwg allow OpenSSH` and ufw's `… to any app NAME`, also for `insert`/`delete`. Profiles are TOML tables (`title`, `description`, `ports = ["80,443/tcp", "443/udp"]`) in `/usr/share/fwg/apps/` (shipped, from `apps/`) and `/etc/fwg/apps/` (local; the first of a name wins, any case). A rule is expanded when added — one rule per port entry — and keeps the profile name as a label shown by `status` (`80,443/tcp (Nginx Full)`); like ufw, editing a profile later does not change existing rules. Profiles are only read when a rule names one (a name never starts with a digit, ports always do), so an unreadable profile directory cannot break `fwg allow 22`. `delete allow 22/tcp` also finds a labelled rule. | `ufw allow OpenSSH`, `ufw app list`. |
 | 3c ✅ | Filters `dovecot`, `postfix-sasl` and `nginx-http-auth`, written from real output of each program in both VMs and tested against it (`crates/fwg-watch/tests/service_filters.rs`), with example jails (`enabled = false`) in `dist/jails.d`. Filters can now say `format = "plain"` to match whole lines of a program's own log file (nginx's `access.log`). The VM test attacks each real server from its own address and expects the ban. Findings in §9.3. | fail2ban's most used jails after sshd. |
 | 3d ✅ | `fwg import ufw` and `fwg import fail2ban` (crate `fwg-import`), dry run unless `--apply`. ufw: each `### tuple ###` line of `user.rules`/`user6.rules` becomes fwg rule words checked by the normal parser; rules for both IP versions are kept once, IPv6-only ones stay in place relative to the shared ones; policies from `/etc/default/ufw`, logging from `ufw.conf`; route rules and protocols other than TCP/UDP are listed as not imported, and ufw's FORWARD DROP is explained, not imported (it would stop Docker, §4). fail2ban: `jail.conf` < `jail.d/*.conf` < `jail.local` < `jail.d/*.local`, key by key, read the way fail2ban 1.0.2 reads them (§9.4); only the enabled jails fwg has filters for, only `maxretry`, `findtime`, `bantime`, `bantime.increment`/`maxtime`, `ignoreip`; values over fwg's limits are clamped with a note; written to a new `jails.d/imported-fail2ban.toml`, never over a file, and a jail already in `jails.d` is shown, not overwritten. Verified in both VMs against ufw's and fail2ban's own reports (`ufw show added`, `fail2ban-client -d`). | Moving an existing machine over without retyping its setup. |
-| 3e | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, example jail as a conffile), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |
+| 3e ✅ | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, jail defaults as conffiles), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |
 
 Decided against for now:
 
@@ -511,7 +512,7 @@ copied). Change before the first public release if another licence is preferred.
 - [x] Download VM images (Debian 13 + Ubuntu 24.04 cloud images) for tier 4.
 - [ ] Add older targets to the VM matrix (Debian 12, Ubuntu 22.04 for nft 1.0.2).
 - [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix (1.0.9 and 1.1.3 verified).
-- [ ] `.deb`/`.rpm` packaging (Phase 1 installs from source; see README).
+- [x] `.deb` packaging for Debian 13 and Ubuntu 24.04 (step 3e).
 - [x] Turso spike (features, crash recovery) — see §5. MSRV checked by CI.
 - [ ] SQLite power-loss test (VM hard reset during writes).
 - [ ] Switch `fwg-store` back to Turso once it reaches 1.0 (§5).
