@@ -108,6 +108,9 @@ fn row(number: usize, rule: &Rule, numbered: bool) -> Row {
     // Without ports, a protocol restriction is shown on the destination: `Anywhere/tcp`.
     let mut to = endpoint(rule.to().addr, rule.to().ports.as_ref(), proto, !has_ports);
     let mut from = endpoint(rule.from().addr, rule.from().ports.as_ref(), proto, false);
+    if let Some(app) = rule.app() {
+        let _ = write!(to, " ({app})");
+    }
     if let Some(iface) = rule.interface() {
         // The interface belongs to the local side of the connection.
         let side = match rule.direction() {

@@ -11,6 +11,7 @@ addresses that keep failing to log in, in the style of fail2ban.
 ```bash
 sudo fwg allow 22/tcp                 # allow SSH first if you are connected over SSH
 sudo fwg allow 80,443/tcp
+sudo fwg allow "Nginx Full"           # an application profile: fwg app list, fwg app info NAME
 sudo fwg limit 2222/tcp               # ~6 new connections per source, then throttled
 sudo fwg allow from 10.0.0.0/8 to any port 5432 proto tcp comment 'office db'
 sudo fwg deny out 25
@@ -75,6 +76,8 @@ cargo build --release
 sudo install -m 0755 target/release/fwg target/release/fwgd /usr/sbin/
 sudo install -m 0644 dist/fwg.service dist/fwgd.service /etc/systemd/system/
 sudo install -D -m 0644 filters/sshd.toml /usr/share/fwg/filters/sshd.toml
+sudo install -d -m 0755 /usr/share/fwg/apps
+sudo install -m 0644 apps/*.toml /usr/share/fwg/apps/
 sudo install -d -m 0750 /etc/fwg /etc/fwg/jails.d
 sudo install -m 0644 dist/jails.d/sshd.toml /etc/fwg/jails.d/sshd.toml
 sudo systemctl daemon-reload

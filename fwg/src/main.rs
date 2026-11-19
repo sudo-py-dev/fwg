@@ -16,7 +16,7 @@ use fwg_core::ConfigDir;
 use fwg_nft::{ActiveBan, Backend, Batch, Nft, NftError, TableRef};
 
 use crate::app::App;
-use crate::cli::{Cli, Cmd, JailCmd};
+use crate::cli::{AppCmd, Cli, Cmd, JailCmd};
 use crate::client::Client;
 use crate::safety::Environment;
 
@@ -54,7 +54,8 @@ fn run(cli: Cli) -> Result<()> {
         SystemNft,
         Environment::detect(),
     )
-    .with_confirm(cli.confirm);
+    .with_confirm(cli.confirm)
+    .with_shipped_apps(cli.share_dir.join("apps"));
     let stdout = io::stdout();
     let out = &mut stdout.lock();
     match cli.command {
@@ -86,6 +87,12 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Show => app.show(out),
         Cmd::Confirm => app.confirm(out),
+        Cmd::App {
+            command: AppCmd::List,
+        } => app.app_list(out),
+        Cmd::App {
+            command: AppCmd::Info { name },
+        } => app.app_info(&name, out),
         Cmd::Rollback => app.rollback(out),
         Cmd::Ban { addr, time } => daemon::ban(&client, addr, time, out),
         Cmd::Unban { addr } => daemon::unban(&client, addr, out),

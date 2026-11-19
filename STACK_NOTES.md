@@ -51,6 +51,8 @@ If a decision changes, update this file in the same commit.
 | `/etc/fwg/rules.toml` | **CLI** (`fwg allow …` writes it) | TOML | Firewall rules + default policies + enabled flag. Has `version = 1` for future migrations and a "managed by fwg" header. Hand edits are allowed but comments are not preserved. |
 | `/etc/fwg/pending.toml` | **CLI** (written by `--confirm`), removed by `fwg confirm`/`rollback` or by fwgd at the deadline | TOML | (Phase 2) the rules before an unconfirmed change, and its deadline |
 | `/etc/fwg/jails.d/*.toml` | Human | TOML | (Phase 2) jail definitions |
+| `/usr/share/fwg/apps/*.toml` | Package | TOML | (Phase 3) shipped application profiles |
+| `/etc/fwg/apps/*.toml` | Human | TOML | (Phase 3) local profiles, same name (any case) wins |
 | `/usr/share/fwg/filters/*.toml` | Package | TOML | (Phase 2) shipped clean-room filters |
 | `/etc/fwg/filters/*.toml` | Human | TOML | (Phase 2) local filter overrides, same name wins |
 | `/var/lib/fwg/fwg.db` | Daemon | Turso (SQLite format) | (Phase 2) ban history, events, stats |
@@ -287,6 +289,7 @@ fwg/
 │   └── tests/netns/      # tier 3: firewall traffic checks
 ├── fwgd/                 # daemon binary (tokio + anyhow)
 ├── filters/              # shipped clean-room filters (TOML)
+├── apps/                 # shipped application profiles (TOML)
 ├── tests/netns/          # tier 3: shared namespace harness and probe tool
 ├── vm/                   # tier 4: test VMs and the smoke test
 └── dist/                 # systemd unit, packaging config
@@ -442,7 +445,7 @@ they switch, in PR-sized steps:
 | Step | What | Why (the ufw / fail2ban habit it replaces) |
 |---|---|---|
 | 3a ✅ | `fwgd --test-filter FILTER [LOG]`: runs a filter (name or file) over a log or stdin and reports failures per pattern and per address, ignored lines, lines from other programs, and the lines that matched nothing. Nothing is banned. | `fail2ban-regex`: the way filters are written and checked. Every new filter in 3c is checked with it. |
-| 3b | App profiles: `fwg app list`, `fwg app info NAME`, `fwg allow OpenSSH`. Profiles are TOML in `/usr/share/fwg/apps.d/` (shipped) and `/etc/fwg/apps.d/` (local, same name wins). The rule is expanded to ports when added and keeps the app name for `status` and `delete`. | `ufw allow OpenSSH`, `ufw app list`. |
+| 3b ✅ | App profiles: `fwg app list`, `fwg app info NAME`, `fwg allow OpenSSH` and ufw's `… to any app NAME`, also for `insert`/`delete`. Profiles are TOML tables (`title`, `description`, `ports = ["80,443/tcp", "443/udp"]`) in `/usr/share/fwg/apps/` (shipped, from `apps/`) and `/etc/fwg/apps/` (local; the first of a name wins, any case). A rule is expanded when added — one rule per port entry — and keeps the profile name as a label shown by `status` (`80,443/tcp (Nginx Full)`); like ufw, editing a profile later does not change existing rules. Profiles are only read when a rule names one (a name never starts with a digit, ports always do), so an unreadable profile directory cannot break `fwg allow 22`. `delete allow 22/tcp` also finds a labelled rule. | `ufw allow OpenSSH`, `ufw app list`. |
 | 3c | More shipped filters, each verified against the real program's output in the VMs, like sshd (§9.1): nginx HTTP basic auth, Postfix SMTP AUTH, Dovecot IMAP/POP3 logins. | fail2ban's most used jails after sshd. |
 | 3d | `fwg import ufw` (reads `/etc/ufw/user.rules`/`user6.rules`, the rules ufw itself wrote) and `fwg import fail2ban` (reads `jail.local` / `jail.d/*.local`: which jails are enabled, `maxretry`, `findtime`, `bantime`, `ignoreip`; never fail2ban's regexes, which stay clean-room). Both show what they would do and change nothing without `--apply`. | Moving an existing machine over without retyping its setup. |
 | 3e | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, example jail as a conffile), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |

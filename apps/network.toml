@@ -1,0 +1,16 @@
+# Network services.
+
+[DNS]
+title = "Name server"
+description = "DNS over UDP and TCP (bind9, unbound, dnsmasq, ...)."
+ports = ["53"]
+
+[WireGuard]
+title = "VPN (WireGuard)"
+description = "WireGuard on its usual port; change it here if yours differs."
+ports = ["51820/udp"]
+
+[Samba]
+title = "Windows file sharing"
+description = "Samba (SMB over TCP, plus NetBIOS name and datagram services)."
+ports = ["139,445/tcp", "137,138/udp"]

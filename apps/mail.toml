@@ -1,0 +1,36 @@
+# Mail servers.
+
+[Postfix]
+title = "Mail server (SMTP)"
+description = "Postfix receiving mail from other servers."
+ports = ["25/tcp"]
+
+["Postfix SMTPS"]
+title = "Mail server (SMTPS)"
+description = "Postfix mail submission over implicit TLS."
+ports = ["465/tcp"]
+
+["Postfix Submission"]
+title = "Mail server (submission)"
+description = "Postfix mail submission from users (STARTTLS)."
+ports = ["587/tcp"]
+
+["Dovecot IMAP"]
+title = "Mail retrieval (IMAP)"
+description = "Dovecot IMAP with STARTTLS."
+ports = ["143/tcp"]
+
+["Dovecot Secure IMAP"]
+title = "Mail retrieval (IMAPS)"
+description = "Dovecot IMAP over implicit TLS."
+ports = ["993/tcp"]
+
+["Dovecot POP3"]
+title = "Mail retrieval (POP3)"
+description = "Dovecot POP3 with STARTTLS."
+ports = ["110/tcp"]
+
+["Dovecot Secure POP3"]
+title = "Mail retrieval (POP3S)"
+description = "Dovecot POP3 over implicit TLS."
+ports = ["995/tcp"]

@@ -1,0 +1,7 @@
+# Application profiles shipped with fwg; install to /usr/share/fwg/apps/.
+# Override one by defining the same name in /etc/fwg/apps/*.toml.
+
+[OpenSSH]
+title = "Secure shell server"
+description = "OpenSSH remote login (sshd)."
+ports = ["22/tcp"]

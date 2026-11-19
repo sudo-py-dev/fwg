@@ -15,6 +15,16 @@ pub struct Cli {
     #[arg(long, global = true, env = "FWG_CONFIG_DIR", value_name = "DIR", default_value = DEFAULT_CONFIG_DIR)]
     pub config_dir: PathBuf,
 
+    /// Where shipped files live (application profiles in `apps/`).
+    #[arg(
+        long,
+        global = true,
+        env = "FWG_SHARE_DIR",
+        value_name = "DIR",
+        default_value = "/usr/share/fwg"
+    )]
+    pub share_dir: PathBuf,
+
     /// The fwgd control socket (for `ban`, `unban`, `banned` and `jail`).
     #[arg(long, global = true, env = "FWG_SOCKET", value_name = "PATH", default_value = fwg_ipc::SOCKET_PATH)]
     pub socket: PathBuf,
@@ -37,6 +47,7 @@ pub const MAX_CONFIRM_SECS: u64 = 3600;
 const EXAMPLES: &str = "\
 Examples:
   fwg allow 22/tcp
+  fwg allow OpenSSH                # an application profile, see `fwg app list`
   fwg allow from 10.0.0.0/8 to any port 5432 proto tcp comment 'office db'
   fwg limit 22/tcp
   fwg deny out 25
@@ -133,10 +144,27 @@ pub enum Cmd {
     },
     /// List banned addresses and the time left (asks fwgd).
     Banned,
+    /// List and show application profiles (`fwg allow OpenSSH`).
+    App {
+        #[command(subcommand)]
+        command: AppCmd,
+    },
     /// Show the jails fwgd runs.
     Jail {
         #[command(subcommand)]
         command: JailCmd,
+    },
+}
+
+/// `fwg app` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum AppCmd {
+    /// List the profiles and their ports.
+    List,
+    /// Show one profile.
+    Info {
+        /// Profile name, e.g. `OpenSSH` or `"Nginx Full"`.
+        name: String,
     },
 }
 

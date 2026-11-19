@@ -27,6 +27,8 @@ run_vm() {
   # Both are called sshd.toml; guest-checks.sh installs them under that name.
   "$VM" push "$name" "$ROOT/filters/sshd.toml" sshd-filter.toml >/dev/null
   "$VM" push "$name" "$ROOT/dist/jails.d/sshd.toml" sshd-jail.toml >/dev/null
+  "$VM" ssh "$name" 'mkdir -p apps' >/dev/null
+  for f in "$ROOT"/apps/*.toml; do "$VM" push "$name" "$f" apps/ >/dev/null; done
 
   local failed=0
   for phase in install enable rules ufw sshd-capture fwgd-install bans confirm-keep; do
