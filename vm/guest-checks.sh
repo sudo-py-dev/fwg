@@ -95,6 +95,8 @@ case "${1:-}" in
   install)
     sudo install -m 0755 ~/fwg /usr/sbin/fwg
     sudo install -m 0644 ~/fwg.service /etc/systemd/system/fwg.service
+    sudo install -d -m 0755 /usr/share/fwg/apps
+    sudo install -m 0644 ~/apps/*.toml /usr/share/fwg/apps/
     sudo rm -rf /etc/fwg
     sudo systemctl daemon-reload
     check "unit enables" sudo systemctl enable fwg.service
@@ -126,6 +128,12 @@ case "${1:-}" in
     check "all rule kinds load (nft $(sudo nft --version | awk '{print $2}'))" sudo fwg reload
     check "limit set exists" contains "$(sudo nft list ruleset)" "set limit4_"
     check "comment kept" contains "$(sudo nft list ruleset)" 'comment "db guard"'
+    check "app list shows the shipped profiles" contains "$(/usr/sbin/fwg app list)" "Nginx Full"
+    check "rule from a profile" contains "$(sudo fwg allow 'Nginx Full')" "allow 443/udp (Nginx Full)"
+    check "profile rule loaded: TCP ports" contains "$(sudo nft list table inet fwg)" "tcp dport { 80, 443 } accept"
+    check "profile rule loaded: UDP port" contains "$(sudo nft list table inet fwg)" "udp dport 443 accept"
+    check "status names the profile" contains "$(sudo fwg status)" "80,443/tcp (Nginx Full)"
+    check "delete by profile" contains "$(sudo fwg delete allow 'nginx full')" "deleted: allow 443/udp (Nginx Full)"
     sudo fwg default deny incoming >/dev/null
     ;;
   ufw)
