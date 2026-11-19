@@ -13,6 +13,8 @@
 #                                   new logins fail, and work again after the rollback)
 #   guest-checks.sh confirm-after   the rollback put the SSH rule back
 #   guest-checks.sh after-reboot    rules and bans came back at boot
+#   guest-checks.sh import          fwg import ufw/fail2ban agree with what ufw and
+#                                   fail2ban themselves report
 #
 # The SSH "attacker" is a network namespace inside this VM (10.200.0.0/24), never
 # the host: host connections arrive from 10.0.2.2, and banning that address would
@@ -327,6 +329,110 @@ case "${1:-}" in
     check "fwg banned lists the manual ban" listed 192.0.2.50 manual
     check "unbanned address stayed unbanned" not in_kernel 10.200.0.2
     check "no fwgd errors in journal" bash -c '! sudo journalctl -b -u fwgd.service -p err --no-pager -q | grep -q .'
+    ;;
+  import)
+    export DEBIAN_FRONTEND=noninteractive
+    # A freshly installed fail2ban would start and ban too; keep it from starting.
+    printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+    sudo chmod 0755 /usr/sbin/policy-rc.d
+    for try in 1 2; do
+      sudo apt-get -o DPkg::Lock::Timeout=300 update -q >/tmp/apt.log 2>&1
+      sudo apt-get -o DPkg::Lock::Timeout=300 install -y -q ufw fail2ban >>/tmp/apt.log 2>&1 && break
+      (( try == 2 )) && { tail -5 /tmp/apt.log; sudo rm -f /usr/sbin/policy-rc.d; exit 1; }
+    done
+    sudo rm -f /usr/sbin/policy-rc.d
+    cfg=/tmp/fwg-import
+    sudo rm -rf "$cfg"
+    # ufw stays disabled: its commands only write its rule files.
+    sudo ufw --force reset >/dev/null 2>&1
+    {
+      sudo ufw allow 22/tcp
+      sudo ufw allow 80,443/tcp
+      sudo ufw limit 2222/tcp
+      sudo ufw deny from 192.0.2.0/24
+      sudo ufw allow from 10.0.0.0/8 to any port 5432 proto tcp comment 'office db'
+      sudo ufw allow out 53
+      sudo ufw reject 23
+      sudo ufw allow in on eth0 to any port 8080
+      sudo ufw allow OpenSSH
+      sudo ufw allow 60000:61000/udp
+      sudo ufw allow from 2001:db8::/32
+      sudo ufw deny out on eth0 to 198.51.100.7 port 25 proto tcp
+      sudo ufw route allow in on eth0 out on eth1 to 10.0.0.0/8 port 443 proto tcp
+      sudo ufw insert 1 deny from 198.51.100.66
+      sudo ufw default reject incoming
+    } >/dev/null 2>&1
+    check "import ufw --apply" sudo fwg --config-dir "$cfg" import ufw --apply
+    # ufw's own list, minus the route rule fwg does not import yet.
+    expected=$(sudo ufw show added | grep -c '^ufw ' || true)
+    expected=$((expected - $(sudo ufw show added | grep -c '^ufw route' || true)))
+    got=$(sudo grep -c '^\[\[rules\]\]' "$cfg/rules.toml" || true)
+    check "every ufw rule but the route rule imported ($got of $expected)" test "$got" = "$expected"
+    check "comment kept" sudo grep -q 'comment = "office db"' "$cfg/rules.toml"
+    check "OpenSSH profile kept as a label" sudo grep -q 'app = "OpenSSH"' "$cfg/rules.toml"
+    check "default policy imported" sudo grep -q 'incoming = "reject"' "$cfg/rules.toml"
+    sudo ip netns add fwg-import 2>/dev/null || true
+    check "the imported rules load into a real kernel" bash -c \
+      "sudo fwg --config-dir $cfg show | sudo ip netns exec fwg-import nft -j -f -"
+    sudo ip netns del fwg-import
+    # fail2ban: the jail.local whose effective values fail2ban-client -d reports.
+    sudo tee /etc/fail2ban/jail.local >/dev/null <<'JAILS'
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+ignoreip = 127.0.0.1/8 ::1
+           192.0.2.0/24
+
+[sshd]
+enabled = true
+maxretry = 3
+
+[postfix-sasl]
+enabled  = true
+bantime  = 2h
+
+[dovecot]
+enabled = true
+findtime: 600
+
+[nginx-http-auth]
+enabled = true
+bantime.increment = true
+bantime.maxtime = 1w
+
+[recidive]
+enabled = true
+JAILS
+    check "import fail2ban --apply" sudo fwg --config-dir "$cfg" import fail2ban --apply
+    check "fwgd accepts the imported jails" sudo fwgd --check --config-dir "$cfg" --filter-dir /usr/share/fwg/filters
+    sudo fail2ban-client -d > /tmp/f2b-dump 2>/dev/null
+    check "imported values match fail2ban-client -d" sudo python3 -I -c '
+import ast, sys, tomllib
+UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+def secs(v):
+    v = str(v)
+    return int(v) if v.isdigit() else int(v[:-1]) * UNITS[v[-1]]
+fwg = tomllib.load(open(sys.argv[1], "rb"))
+f2b = {}
+for line in open(sys.argv[2]):
+    if line.startswith("["):
+        item = ast.literal_eval(line.strip())
+        if item[0] == "set" and len(item) >= 4:
+            f2b.setdefault(item[1], {})[item[2]] = item[3:]
+bad = []
+for name, jail in fwg.items():
+    want = f2b[name]
+    pairs = [("max_retry", jail["max_retry"], int(want["maxretry"][0])),
+             ("find_time", secs(jail["find_time"]), secs(want["findtime"][0])),
+             ("ban_time", secs(jail["ban_time"]), secs(want["bantime"][0])),
+             ("ignore", jail.get("ignore", []), list(want.get("addignoreip", [])))]
+    if "bantime.maxtime" in want:
+        pairs.append(("ban_time_max", secs(jail["ban_time_max"]), secs(want["bantime.maxtime"][0])))
+    bad += [f"{name} {k}: fwg {a} fail2ban {b}" for k, a, b in pairs if a != b]
+print("\n".join(bad)); sys.exit(1 if bad or len(fwg) != 4 else 0)
+' "$cfg/jails.d/imported-fail2ban.toml" /tmp/f2b-dump
+    check "fail2ban never started" not systemctl is-active fail2ban
     ;;
   *)
     echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|confirm-keep|confirm-lockout|confirm-after|after-reboot" >&2

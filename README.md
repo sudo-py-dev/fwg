@@ -71,6 +71,20 @@ only `sshd` is enabled, the others say `enabled = false` until you change it.
 Add your own management network to a jail's `ignore` list so a mistyped password
 cannot lock you out.
 
+## Moving from ufw or fail2ban
+
+```bash
+sudo fwg import ufw                   # shows the rules, policies and logging it would take
+sudo fwg import ufw --apply           # adds them (with --confirm 60 if you like)
+sudo fwg import fail2ban              # shows the jails it would write
+sudo fwg import fail2ban --apply      # writes /etc/fwg/jails.d/imported-fail2ban.toml
+```
+
+Only settings are imported: fwg keeps its own filters. Whatever cannot be imported
+(ufw route rules, fail2ban jails fwg has no filter for) is listed with the reason.
+Then turn the old tool off (`ufw disable`, `systemctl disable --now fail2ban`) so only
+one of them filters and bans.
+
 ## Install from source
 
 Requires Rust 1.89+ and the `nftables` package.
