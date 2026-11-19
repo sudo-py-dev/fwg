@@ -211,8 +211,8 @@ Five tiers. Tiers 0–3 need **no root** and run on every `cargo test`.
 | 0 | Unit tests: values, parser, rule set, rules file, nft runner, CLI logic against a fake backend, CLI binary end to end | `cargo test`, `proptest`, `assert_cmd` | ✅ |
 | 1 | Snapshots: generated nft JSON for every rule kind, the `rules.toml` format, the `status` table | `insta` | ✅ |
 | 2 | **Real nft load**: apply the generated ruleset inside an unprivileged user+network namespace, read it back with `nft -j list`, compare | `unshare -rn` (`crates/fwg-nft/tests/ruleset.rs`, `backend.rs` tests re-run themselves inside a namespace) | ✅ every scenario loads, twice, without duplicating the table |
-| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` (firewall, 28 checks) and `crates/fwg-nft/tests/netns/ban_traffic.sh` (bans, 9 checks) sharing `tests/netns/harness.sh`, and `fwgd/tests/netns/daemon.sh` (daemon end to end, 21 checks); run by `cargo test` (~7 s each) | ✅ breaking `limit` or the ban rule on purpose makes them fail |
-| 4 | **Full system**: systemd unit, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft | `vm/smoke-test.sh` (fresh VM each run, ~8 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules back after reboot |
+| 3 | **Real traffic**: two namespaces joined by a veth pair; servers on the "host" side, client probes from the other side; assert open / blocked / RST / ICMP / rate-limited, IPv4 and IPv6 | `fwg/tests/netns/traffic.sh` (firewall, 28 checks) and `crates/fwg-nft/tests/netns/ban_traffic.sh` (bans, 9 checks) sharing `tests/netns/harness.sh`, and `fwgd/tests/netns/daemon.sh` (daemon end to end with the real `fwg` CLI as client, 33 checks); run by `cargo test` (~7 s each) | ✅ breaking `limit`, the ban rule or `fwg unban` on purpose makes them fail |
+| 4 | **Full system**: systemd units, boot persistence, real `sshd` lockout protection, coexistence with ufw, every rule kind on each distro's nft, real SSH brute force banned by `fwgd` | `vm/smoke-test.sh` (fresh VM each run, ~12 min for both) | ✅ Debian 13 (nft 1.1.3) and Ubuntu 24.04 (nft 1.0.9): all checks pass, incl. rules and bans back after reboot |
 | 5 | CI: fmt, clippy, all tests with `FWG_REQUIRE_NETNS=1` (never skip), MSRV 1.89 check, `cargo-deny` | `.github/workflows/ci.yml`, `deny.toml` | ✅ set up |
 
 Available for traffic tests: `ip`, `tc` (latency/loss injection), `socat`, `nc`, `python3`.
@@ -252,6 +252,11 @@ separate machine with its own kernel — breaking its firewall costs nothing.
   corruption and relies on TLS for authenticity; GPG signatures were not checked).
 - `vm/images/` and `vm/state/` (images, overlays, the test SSH key, console logs) are
   git-ignored and never leave this machine.
+- SSH attacks in the smoke test come from a network namespace *inside* the VM
+  (`10.200.0.0/24` on a veth pair), never from the host: host connections arrive from
+  `10.0.2.2`, and banning that would cut off the harness's own SSH.
+- `fwg-vm up` checks the cloud-init packages are really installed: when apt cannot
+  reach the mirror, cloud-init still reports `done` with no errors (seen once on Debian).
 - On Debian, `/usr/sbin` is not in a normal user's `PATH`; fwg finds `nft` through its
   fixed path list (§4), so this does not matter.
 
@@ -326,7 +331,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
 | 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. | `fwg-store` |
 | 2e ✅ | `fwgd`: loads jails (local filters override shipped ones), opens the DB, creates the ban table and restores running bans, then one loop handles log events, control requests (`status`, `banned`, `ban`, `unban`), saving journal cursors every 5 s and pruning history older than 90 d. Repeat offences counted over 30 d. Sources run on threads; SIGTERM saves cursors, stops them and removes the socket. Socket `0600` in a `0700` dir, peer uid checked, one request per connection, 1 MiB / 5 s limits. `dist/fwgd.service` (`systemd-analyze security`: 4.1 OK). | `fwgd`, `fwg-ipc` |
-| 2f | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`. VM test: a real SSH brute force from the host gets banned. | `fwg` |
+| 2f ✅ | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`, over the control socket (`--socket`/`FWG_SOCKET` to override; 10 s limit to connect and again for the exchange — the connect runs on a thread because `UnixStream` has no connect timeout; plain errors for "not running" and "not root"). Example jail `dist/jails.d/sshd.toml`. VM test: failed SSH logins from a network namespace *inside* the VM get banned, shown by the CLI, lifted by `unban`, and kept across `systemctl restart fwgd` and a reboot. `filters/sshd.toml` verified against real OpenSSH output (§9.1). | `fwg`, `vm/` |
 
 Decisions:
 
@@ -356,6 +361,48 @@ Decisions:
 - **Config:** jails in `/etc/fwg/jails.d/*.toml` (human-owned, never rewritten); shipped
   filters in `/usr/share/fwg/filters/`, local overrides in `/etc/fwg/filters/`.
   `fwgd --check` validates everything without starting.
+
+### 9.1 Real OpenSSH output (verified 2026-11-19 in the test VMs)
+
+Captured from the journal by `vm/guest-checks.sh sshd-capture` (saved to
+`vm/state/<vm>-sshd-capture.txt`, git-ignored); the lines, with documentation addresses,
+are in `crates/fwg-watch/tests/sshd_filter.rs`. Every failure line matched the shipped
+filter as written; no pattern needed a change.
+
+What one failed connection logs (lines the filter counts):
+
+| Kind | Lines | Counted |
+|---|---|---|
+| Wrong password, existing user | `Failed password for U from A port P ssh2`, `Connection closed by authenticating user U A port P [preauth]` | 2 |
+| Wrong password, unknown user | `Invalid user U from A port P`, `Failed password for invalid user U …`, `Connection closed by invalid user U …` | 3 |
+| Key not accepted, existing user (key-only) | `Connection closed by authenticating user U A port P [preauth]` only — **no** `Failed publickey` line at the default `LogLevel INFO` | 1 |
+| Key not accepted, unknown user | `Invalid user …`, `Connection closed by invalid user …` | 2 |
+| Out of attempts (`MaxAuthTries` 6) | 6 × `Failed password …`, `error: maximum authentication attempts exceeded for … [preauth]`, `Disconnecting authenticating\|invalid user U A port P: Too many authentication failures [preauth]` | 8 |
+| Only outdated algorithms | `Unable to negotiate with A port P: no matching key exchange method found. Their offer: … [preauth]` | 1 |
+
+Not counted, on purpose: `pam_unix(sshd:auth): authentication failure; … rhost=A user=U`
+and `PAM N more authentication failures; …` — they repeat a `Failed password` line, and
+`user=` at the end is attacker-chosen text after the address.
+
+So `max_retry = 5` bans after 2–3 password guesses, or 5 key-only attempts.
+
+**OpenSSH 9.8+ throttles on its own (`PerSourcePenalties`, on by default; Debian 13
+has `authfail:5 … min:15`):** each failed login adds a 5 s penalty, and once 15 s have
+built up sshd refuses new connections from that source for a while, **without logging
+them at `INFO`**. Verified: 8 key-only attempts 1 s apart logged only 4 failures. So
+on these systems a slow attacker needs longer to reach `max_retry`, but each refused
+attempt costs them nothing either; fwg's ban still follows once enough failures are
+logged. The VM test therefore retries for a time budget, not a fixed count.
+Ubuntu 24.04 (OpenSSH 9.6) has no penalties.
+
+Process names (`_COMM`, which the journal source matches):
+
+| VM | OpenSSH | `_COMM` of every line above |
+|---|---|---|
+| Debian 13 | 10.0p2 | `sshd-session` (no line came from the new `sshd-auth` helper) |
+| Ubuntu 24.04 | 9.6p1 | `sshd` |
+
+Both are in the filter's `programs`; the message texts are identical on both.
 
 ## 10. Licence
 
