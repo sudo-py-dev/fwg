@@ -1,0 +1,22 @@
+# Dovecot IMAP/POP3 login failures. Shipped with fwg; override in /etc/fwg/filters/dovecot.toml.
+#
+# Written from Dovecot 2.3.21 (Ubuntu 24.04) and 2.4.1 (Debian 13) output. The user
+# name comes before the address and Dovecot does not escape `>` in it, so the name is
+# matched as `user=<[^>]*>` and the whole line is anchored up to `session=<...>`: a
+# name holding `>, method=..., rip=<victim>` makes the line fail to match instead of
+# planting an address.
+
+description = "Dovecot IMAP/POP3 authentication failures"
+
+# Through the journal Dovecot logs from its log process (`_COMM=log`, run as root);
+# through syslog its tag is `dovecot`. Journal entries from login users are never
+# trusted, so a user program named `log` cannot feed this filter.
+programs = ["dovecot", "log"]
+
+failures = [
+    # 2.3: "imap-login: Disconnected: Connection closed (auth failed, 1 attempts in 11 secs): user=<bob>, ..."
+    # 2.4: "imap-login: Login aborted: Connection closed (auth failed, 1 attempts in 11 secs) (auth_failed): user=<bob>, ..."
+    '^(?:imap|pop3|submission|managesieve)-login: (?:Disconnected|Login aborted): [A-Za-z ]*\(auth failed, \d+ attempts? in \d+ secs\)(?: \(auth_failed\))?: user=<[^>]*>, method=[A-Za-z0-9-]+, rip=<HOST>, lip=[0-9A-Fa-f:.]+(?:, [A-Za-z][A-Za-z ]*)*, session=<[^>]*>$',
+]
+
+ignore = []
