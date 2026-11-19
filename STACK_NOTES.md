@@ -55,7 +55,7 @@ If a decision changes, update this file in the same commit.
 | `/etc/fwg/apps/*.toml` | Human | TOML | (Phase 3) local profiles, same name (any case) wins |
 | `/usr/share/fwg/filters/*.toml` | Package | TOML | (Phase 2) shipped clean-room filters |
 | `/etc/fwg/filters/*.toml` | Human | TOML | (Phase 2) local filter overrides, same name wins |
-| `/var/lib/fwg/fwg.db` | Daemon | SQLite | (Phase 2) ban history, events, stats |
+| `/var/lib/fwg/fwg.db` | Daemon | Turso (SQLite format) | (Phase 2) ban history, events, stats |
 | `/run/fwg/fwgd.sock` | Daemon | JSON lines | (Phase 2) CLI ↔ daemon IPC, mode `0600`, root only |
 
 Writes to any file fwg owns are **atomic**: write a temp file in the same directory,
@@ -152,35 +152,47 @@ Exact JSON for every construct above was captured from real nft output on this m
 | Async runtime | `tokio` | 1.54.1 | MIT | 2 |
 | Logging | `tracing`, `tracing-subscriber` | 0.1.44 / 0.3.23 | MIT | 2 |
 | Regex | `regex` | 1.13.2 | MIT/Apache | 2 — **linear time, ReDoS-safe** on attacker-controlled log lines |
-| Database | `rusqlite` with bundled SQLite (Turso returns at its 1.0, see below) | 0.41.1 | MIT | 2 |
-| Fuzzing (isolated test workspace) | `libfuzzer-sys` | 0.4.10 | MIT/Apache; bundled LLVM libFuzzer under NCSA | Post-Phase 3 |
+| Database | `turso` **pinned `=0.8.3`** (pre-1.0, owner's decision, see below) | 0.8.3 | MIT | 2 |
 | Tests | `insta` (snapshots), `proptest`, `assert_cmd` | 1.49.0 / 1.12.0 / 2.2.2 | Apache / MIT/Apache | 1 |
 
 No crate is added without a line in this table.
 
-### SQLite now, Turso after its 1.0 (decided 2026-11-19)
-- **`fwg-store` uses SQLite through `rusqlite` 0.41.1** (`default-features = false`,
-  `bundled`). Turso (`=0.8.3`) was used for steps 2d–2g and is **dropped until it reaches
-  1.0**: a pre-1.0 storage engine is the wrong base for a security daemon. The `Store`
-  trait keeps the switch back to one module (`sqlite_store.rs` replaced `turso_store.rs`).
-- Why `rusqlite`: the standard, mature SQLite binding; MSRV 1.89 like ours. 0.41.1 is the
-  newest release more than two weeks old (0.42.0 and 0.43.0 were days old).
-- **Bundled SQLite** (compiled from the C source in `libsqlite3-sys`, which needs a C
-  compiler at build time) rather than the system `libsqlite3`: one known SQLite on every
-  distro, and no `libsqlite3-dev` needed to build. Step 3e keeps this build for
-  the alpha packages so they use the same SQLite as the source build and tests.
-  System SQLite fixes from apt do not update this copy. Update the pinned dependency
-  and rebuild the packages when bundled SQLite needs a fix.
-- Same SQLite file format and schema (v1) as before, so the database file is unchanged.
-- Durability: WAL journal with `synchronous = FULL` (a returned commit survives power
-  loss; `NORMAL` may lose the last ones), 5 s busy timeout. A unit test checks both.
-- SQLite calls block, so each runs on `spawn_blocking`; one connection behind a mutex.
-- ✅ Same contract test as `MemoryStore`, reopen, newer schema refused, corrupt rows
-  reported, and the `kill -9` mid-write test (8 rounds: every reported write survives).
-- Effect: `Cargo.lock` went from 324 to 125 packages; no BSD-3/ISC licences or
-  `cfg_block` clarification needed any more.
-- `forbid(unsafe_code)` covers *our* crates only; `rusqlite` and `libsqlite3-sys` use
-  `unsafe` (FFI to SQLite's C code). Audited with `cargo-deny`, reviewed on upgrades.
+### Turso (pinned, behind a trait)
+- **Decided 2026-11-20 (owner's call): `fwg-store` uses Turso `=0.8.3` again**, although the
+  crate is still pre-1.0. From 2026-11-19 to 2026-11-20 it used SQLite through `rusqlite`
+  (bundled) until Turso reached 1.0; the owner reversed that, judging Turso production
+  ready. 0.8.3 is still the newest stable release (2026-10-12); `0.8.4-pre.*` and
+  `0.9.0-pre.*` are pre-releases and not used. The `Store` trait kept the switch to one
+  module both ways, and the database file format (SQLite) and schema (v1) never changed.
+- `turso = "=0.8.3"`, upgraded only on purpose, with the crash-recovery tests passing.
+- Lives only in `fwg-store`, behind a `Store` trait. Nothing else imports `turso`.
+- **The firewall never depends on the DB.** Active bans live in the kernel (`fwg_ban` sets
+  with timeouts). If the DB is broken, protection keeps working; the daemon rebuilds state.
+- Used with `default-features = false`: drops `mimalloc` (a C allocator that would replace
+  the global allocator) and `fts` (full-text search). Network sync (`hyper`, `rustls`) is
+  already opt-in and stays off.
+- ✅ Spike (2026-11-18): a writer committing 2-row transactions was `kill -9`ed at random
+  30 times. Every reported commit survived, at most the one in-flight commit appeared,
+  no transaction was ever half-written, `PRAGMA integrity_check` stayed `ok`.
+  This covers process crashes, not power loss (page cache survives `kill -9`); a VM
+  hard-reset test is still open.
+- ✅ Measured 2026-11-20 with `strace -c`: 504 commits made 513 `fsync` calls, so every
+  commit is flushed to disk (the same guarantee as SQLite's `synchronous = FULL`). Re-check
+  this on every Turso upgrade: the `kill -9` test cannot see a missing `fsync`.
+- ⚠️ Cost: 234 crates and ~4 min for a debug build. Acceptable because **only the daemon
+  (`fwgd`) links it**; the `fwg` CLI asks the daemon over the socket and stays small.
+- Turso declares no `rust-version`; the CI MSRV job is the check.
+- Licences it adds beyond MIT/Apache: BSD-3-Clause (`subtle`, `sha1_smol`, `bindgen`) and
+  ISC (`libloading`), both permissive and now allowed in `deny.toml`; `cfg_block` ships only
+  an Apache-2.0 notice, declared with a `clarify` entry pinned to the file's hash.
+- `bindgen` is a build-dependency of `turso_sdk_kit`, but its build script exits at once on
+  non-Windows targets: on Linux no libclang or C compiler is needed (checked in `build.rs`).
+- Verified on 0.8.3 before use: tuples as parameters, `IF NOT EXISTS` indexes, upsert
+  (`ON CONFLICT … DO UPDATE`), row counts from `UPDATE`/`DELETE`, `BEGIN`/`ROLLBACK`, and
+  that `Database`, `Connection` and their futures are `Send + Sync`.
+- `forbid(unsafe_code)` covers *our* crates only; dependencies (including Turso) contain
+  `unsafe` internally. That is audited with `cargo-deny` (advisories) and reviewed on
+  upgrades.
 
 ### journald
 Read with `journalctl --follow --output=json --lines=0 [--after-cursor=C] _COMM=p …` as a
@@ -288,7 +300,7 @@ fwg/
 ├── crates/
 │   ├── fwg-core/         # rule model, CLI-independent parsing, config + rules files (TOML)
 │   ├── fwg-nft/          # typed nft JSON schema, ruleset builder, `Backend` trait + `nft` runner
-│   ├── fwg-store/        # (Phase 2) `Store` trait + SQLite implementation
+│   ├── fwg-store/        # (Phase 2) `Store` trait + Turso implementation
 │   ├── fwg-watch/        # filters, jails, failure tracking (log sources: 2c)
 │   └── fwg-ipc/          # control socket protocol (JSON lines)
 ├── fwg/                  # CLI binary (clap + anyhow)
@@ -343,7 +355,7 @@ bans repeat offenders in the kernel. Built in PR-sized steps:
 | 2a ✅ | Ban table in the kernel: `inet fwg_ban`, sets `ban4`/`ban6` (`flags timeout`, `size 262144`), chain `input` at `priority filter - 10` dropping `@ban4`/`@ban6`. Ban = add-delete-add of the element in one batch (replaces any earlier timeout), unban = add-delete (never fails on a missing address). Ban time 1 s to 365 days. Re-creating the table keeps existing bans; `fwg reload`/`disable` never touch it. | `fwg-nft` |
 | 2b ✅ | Filters (TOML: `description`, `programs`, `failures`, `ignore`; patterns must be anchored `^…$` and have exactly one `<HOST>`), jails (`log`, `max_retry` 5, `find_time` 10m, `ban_time` 1h, optional doubling up to `ban_time_max` 1w, `ignore`), sliding-window tracker (bounded, evicts the oldest tenth when full), `Watcher` tying them together. Pure logic. Clean-room `filters/sshd.toml` from OpenSSH message formats — **to verify against real sshd output in the VM (2f)**. | `fwg-watch` |
 | 2c ✅ | Log sources: `FileTail` (polling; starts at the end; rotation drains the old file first; truncation restarts at 0; a file that appears later is read from its start; lines over 8 KiB skipped), syslog line parsing (rsyslog ISO and traditional timestamps), and `JournalReader` (journal, see §5). | `fwg-watch` |
-| 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. (Replaced by `SqliteStore` in Phase 3, §5.) | `fwg-store` |
+| 2d ✅ | `Store` trait (record ban, count earlier bans, active bans — latest per address, end bans on unban, prune, journal cursors) with `TursoStore` (schema v1 created in one transaction; a newer schema is refused; bad rows are reported, not trusted) and `MemoryStore`. One contract test runs against both; Turso also tested for reopen and `kill -9` mid-write. (Briefly replaced by SQLite in Phase 3, then restored, §5.) | `fwg-store` |
 | 2e ✅ | `fwgd`: loads jails (local filters override shipped ones), opens the DB, creates the ban table and restores running bans, then one loop handles log events, control requests (`status`, `banned`, `ban`, `unban`), saving journal cursors every 5 s and pruning history older than 90 d. Repeat offences counted over 30 d. Sources run on threads; SIGTERM saves cursors, stops them and removes the socket. Socket `0600` in a `0700` dir, peer uid checked, one request per connection, 1 MiB / 5 s limits. `dist/fwgd.service` (`systemd-analyze security`: 4.1 OK). | `fwgd`, `fwg-ipc` |
 | 2g ✅ | `--confirm SECS` (5–3600) on every command that changes rules, plus `fwg confirm` and `fwg rollback` — see the decision below. | `fwg-core`, `fwg-nft`, `fwg`, `fwgd` |
 | 2f ✅ | CLI: `fwg ban IP [--time 1h]`, `fwg unban IP`, `fwg banned`, `fwg jail list`, `fwg jail status NAME`, over the control socket (`--socket`/`FWG_SOCKET` to override; 10 s limit to connect and again for the exchange — the connect runs on a thread because `UnixStream` has no connect timeout; plain errors for "not running" and "not root"). Example jail `dist/jails.d/sshd.toml`. VM test: failed SSH logins over IPv4 and IPv6 from a network namespace *inside* the VM get banned, shown by the CLI, lifted by `unban`, and kept across `systemctl restart fwgd` and a reboot. `filters/sshd.toml` verified against real OpenSSH output (§9.1). | `fwg`, `vm/` |
@@ -528,5 +540,5 @@ copied). Change before the first public release if another licence is preferred.
 - [x] `.deb` packaging for Debian 13 and Ubuntu 24.04 (step 3e).
 - [ ] RPM packaging.
 - [x] Turso spike (features, crash recovery) — see §5. MSRV checked by CI.
-- [ ] SQLite power-loss test (VM hard reset during writes).
-- [ ] Switch `fwg-store` back to Turso once it reaches 1.0 (§5).
+- [ ] Turso power-loss test (VM hard reset during writes).
+- [ ] Move to Turso 1.0 when it is released (§5).
