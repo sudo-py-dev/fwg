@@ -150,3 +150,94 @@ fn shipped_jail_uses_the_journal_and_the_defaults() {
         "no increment by default"
     );
 }
+
+/// Real lines, captured from the journal in the test VMs (`vm/smoke-test.sh` saves
+/// them to `vm/state/<vm>-sshd-capture.txt`), with the address and port replaced.
+/// Each group is what one failed connection logs, in order; `true` marks a line
+/// that counts as a failure.
+const REAL_OPENSSH: &[(&str, bool)] = &[
+    // OpenSSH 10.0p2 (Debian 13, `_COMM=sshd-session`) and 9.6p1 (Ubuntu 24.04,
+    // `_COMM=sshd`) log exactly these texts; only the process name differs.
+    // Wrong password for an existing user: 2 failures.
+    (
+        "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.0.2.1  user=fwg",
+        false,
+    ),
+    (
+        "Failed password for fwg from 192.0.2.1 port 45533 ssh2",
+        true,
+    ),
+    (
+        "Connection closed by authenticating user fwg 192.0.2.1 port 45533 [preauth]",
+        true,
+    ),
+    // Wrong password for a user that does not exist: 3 failures.
+    ("Invalid user nosuchuser from 192.0.2.1 port 37307", true),
+    (
+        "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.0.2.1",
+        false,
+    ),
+    (
+        "Failed password for invalid user nosuchuser from 192.0.2.1 port 37307 ssh2",
+        true,
+    ),
+    (
+        "Connection closed by invalid user nosuchuser 192.0.2.1 port 37307 [preauth]",
+        true,
+    ),
+    // A key the server does not accept, existing user: 1 failure.
+    (
+        "Connection closed by authenticating user fwg 192.0.2.1 port 44435 [preauth]",
+        true,
+    ),
+    // ... and a user that does not exist: 2 failures.
+    ("Invalid user nosuchuser from 192.0.2.1 port 42373", true),
+    (
+        "Connection closed by invalid user nosuchuser 192.0.2.1 port 42373 [preauth]",
+        true,
+    ),
+    // Out of attempts (MaxAuthTries 6): 6 "Failed password" lines, then these.
+    (
+        "error: maximum authentication attempts exceeded for fwg from 192.0.2.1 port 58537 ssh2 [preauth]",
+        true,
+    ),
+    (
+        "Disconnecting authenticating user fwg 192.0.2.1 port 58537: Too many authentication failures [preauth]",
+        true,
+    ),
+    (
+        "PAM 5 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.0.2.1  user=fwg",
+        false,
+    ),
+    (
+        "error: maximum authentication attempts exceeded for invalid user nobody2 from 192.0.2.1 port 45187 ssh2 [preauth]",
+        true,
+    ),
+    (
+        "Disconnecting invalid user nobody2 192.0.2.1 port 45187: Too many authentication failures [preauth]",
+        true,
+    ),
+    // A client with only outdated algorithms: 1 failure.
+    (
+        "Unable to negotiate with 192.0.2.1 port 49683: no matching key exchange method found. Their offer: diffie-hellman-group1-sha1,ext-info-c,kex-strict-c-v00@openssh.com [preauth]",
+        true,
+    ),
+];
+
+fn check_real_lines(lines: &[(&str, bool)]) {
+    assert!(lines.len() > 10);
+    let expected: IpAddr = "192.0.2.1".parse().unwrap();
+    for (message, counts) in lines {
+        let found = source(message);
+        if *counts {
+            assert_eq!(found, Some(expected), "should count: {message}");
+        } else {
+            assert_eq!(found, None, "should not count: {message}");
+        }
+    }
+}
+
+#[test]
+fn real_openssh_lines() {
+    check_real_lines(REAL_OPENSSH);
+}
