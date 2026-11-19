@@ -434,6 +434,30 @@ IPv6 the lines are the same with the bare address (`from fd20::2 port P`, no bra
 the VM test bans an IPv6 attacker too (in `ban6`, IPv4 from the same host still let in,
 restored after reboot).
 
+## 9.2 Phase 3 plan (parity with what ufw and fail2ban users rely on)
+
+Phase 2 covers the core of both tools. Phase 3 closes the gaps people meet first when
+they switch, in PR-sized steps:
+
+| Step | What | Why (the ufw / fail2ban habit it replaces) |
+|---|---|---|
+| 3a ✅ | `fwgd --test-filter FILTER [LOG]`: runs a filter (name or file) over a log or stdin and reports failures per pattern and per address, ignored lines, lines from other programs, and the lines that matched nothing. Nothing is banned. | `fail2ban-regex`: the way filters are written and checked. Every new filter in 3c is checked with it. |
+| 3b | App profiles: `fwg app list`, `fwg app info NAME`, `fwg allow OpenSSH`. Profiles are TOML in `/usr/share/fwg/apps.d/` (shipped) and `/etc/fwg/apps.d/` (local, same name wins). The rule is expanded to ports when added and keeps the app name for `status` and `delete`. | `ufw allow OpenSSH`, `ufw app list`. |
+| 3c | More shipped filters, each verified against the real program's output in the VMs, like sshd (§9.1): nginx HTTP basic auth, Postfix SMTP AUTH, Dovecot IMAP/POP3 logins. | fail2ban's most used jails after sshd. |
+| 3d | `fwg import ufw` (reads `/etc/ufw/user.rules`/`user6.rules`, the rules ufw itself wrote) and `fwg import fail2ban` (reads `jail.local` / `jail.d/*.local`: which jails are enabled, `maxretry`, `findtime`, `bantime`, `ignoreip`; never fail2ban's regexes, which stay clean-room). Both show what they would do and change nothing without `--apply`. | Moving an existing machine over without retyping its setup. |
+| 3e | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, example jail as a conffile), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |
+
+Decided against for now:
+
+- **Route/forward rules (`ufw route`)**: fwg has the `routed` default policy; per-rule
+  forwarding needs care around Docker/libvirt tables (§4) and gets its own step later.
+- **Raw nft hooks (`before.rules`/`after.rules`)**: users can load their own nft table
+  next to `inet fwg`; fwg does not need to splice text into its own.
+- **fail2ban actions (mail, custom scripts)**: running scripts as root on log input is a
+  large attack surface; fwg only bans in the kernel. Notifications can read the journal.
+- **fail2ban filter syntax**: fwg's filters stay clean-room TOML with anchored patterns
+  (§9); the importer maps jail *settings* only.
+
 ## 10. Licence
 
 Default: **MIT OR Apache-2.0** (clean-room: no ufw/fail2ban code, regex, or test files

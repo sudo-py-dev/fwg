@@ -80,15 +80,40 @@ fn load_jails(dir: &Path) -> Result<Vec<Jail>> {
     )?)
 }
 
-fn load_filter(dirs: &[PathBuf], name: &str) -> Result<Filter> {
-    let Some(path) = dirs
-        .iter()
+/// A filter given by name (searched in `dirs`) or by the path of its file.
+/// Returns where it came from and the filter.
+///
+/// # Errors
+/// If it is not found, cannot be read, or is invalid.
+pub fn find_filter(dirs: &[PathBuf], name_or_path: &str) -> Result<(PathBuf, Filter)> {
+    let path = PathBuf::from(name_or_path);
+    if name_or_path.contains('/') || path.extension().is_some_and(|e| e == "toml") {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .with_context(|| format!("no filter name in {name_or_path}"))?;
+        let text = read_limited(&path)?;
+        let filter =
+            Filter::from_toml(name, &text).with_context(|| format!("in {}", path.display()))?;
+        return Ok((path, filter));
+    }
+    let path = filter_path(dirs, name_or_path)?;
+    let filter = load_filter(dirs, name_or_path)?;
+    Ok((path, filter))
+}
+
+fn filter_path(dirs: &[PathBuf], name: &str) -> Result<PathBuf> {
+    dirs.iter()
         .map(|d| d.join(format!("{name}.toml")))
         .find(|p| p.is_file())
-    else {
-        let searched: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
-        bail!("filter `{name}` not found in {}", searched.join(", "));
-    };
+        .with_context(|| {
+            let searched: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+            format!("filter `{name}` not found in {}", searched.join(", "))
+        })
+}
+
+fn load_filter(dirs: &[PathBuf], name: &str) -> Result<Filter> {
+    let path = filter_path(dirs, name)?;
     let text = read_limited(&path)?;
     Filter::from_toml(name, &text).with_context(|| format!("in {}", path.display()))
 }

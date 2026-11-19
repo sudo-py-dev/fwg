@@ -29,11 +29,13 @@ check() { # check DESCRIPTION COMMAND...
   fi
 }
 contains() { grep -qF -- "$2" <<<"$1"; }
-fwg_loaded() { sudo nft list tables | grep -qx 'table inet fwg'; }
+# No `grep -q` after a pipe here: it exits at the first match, nft then dies of
+# SIGPIPE if it had more to write, and pipefail turns the match into a failure.
+fwg_loaded() { sudo nft list tables | grep -x 'table inet fwg' >/dev/null; }
 
 readonly SERVER=10.200.0.1 SERVER6=fd20::1
 readonly ASKPASS=/tmp/fwg-wrong-password
-in_kernel() { sudo nft list set inet fwg_ban "ban$([[ $1 == *:* ]] && echo 6 || echo 4)" | grep -qwF -- "$1"; }
+in_kernel() { sudo nft list set inet fwg_ban "ban$([[ $1 == *:* ]] && echo 6 || echo 4)" | grep -wF -- "$1" >/dev/null; }
 not() { ! "$@"; }
 listed() { sudo fwg banned | awk -v addr="$1" -v jail="$2" '$1 == addr && $2 == jail {found = 1} END {exit !found}'; }
 can_connect() { sudo ip netns exec attacker timeout 3 bash -c "</dev/tcp/${1:-$SERVER}/22"; }
@@ -207,6 +209,10 @@ case "${1:-}" in
     check "fwg ban IPv6 by hand" contains "$(sudo fwg ban 2001:db8::50 --time 2h)" "banned 2001:db8::50 for 2h"
     check "manual ban listed as manual" listed 192.0.2.50 manual
     check "no fwgd errors" bash -c '! sudo journalctl -u fwgd.service -p err --no-pager -q | grep -q .'
+    report="$(sudo journalctl _COMM=sshd _COMM=sshd-session -o cat --no-pager | /usr/sbin/fwgd --test-filter sshd)"
+    check "fwgd --test-filter counts the real journal's failures" \
+      bash -c "grep -qE '^  failures: +[1-9][0-9]*  from [1-9]' <<<\"\$1\"" _ "$report"
+    check "fwgd --test-filter names the attacker" contains "$report" "10.200.0.2 "
     ;;
   confirm-keep)
     check "--confirm change" contains "$(sudo fwg --confirm 5 allow 8080/tcp)" "Run \`fwg confirm\` within 5 s"

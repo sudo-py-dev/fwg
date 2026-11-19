@@ -60,6 +60,7 @@ sudo fwg unban 192.0.2.7
 sudo fwg jail list
 sudo fwg jail status sshd
 sudo fwgd --check                     # validate jails and filters without starting
+sudo journalctl _COMM=sshd _COMM=sshd-session -o cat | fwgd --test-filter sshd   # what a filter counts
 ```
 
 Add your own management network to a jail's `ignore` list so a mistyped password

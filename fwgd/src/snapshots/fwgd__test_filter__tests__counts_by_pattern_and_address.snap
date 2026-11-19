@@ -1,0 +1,29 @@
+---
+source: fwgd/src/test_filter.rs
+expression: "render(&sshd(), \"test.log\", &report, false)"
+---
+Filter:   sshd (OpenSSH authentication failures)
+From:     test.log
+Programs: sshd, sshd-session
+
+Lines read:          6
+  failures:          4  from 2 address(es)
+  ignored:           0
+  no match:          1
+  other program:     1  (syslog lines from programs this filter does not watch)
+  too long:          0  (over 8192 bytes, skipped)
+
+Failures by pattern:
+       2  #1  ^Failed (?:password|publickey|keyboard-interactive/pam|none) for (?:invalid user )?\S* from <HOST> port \d+ ssh2(?:: .*)?$
+       1  #2  ^Invalid user \S* from <HOST> port \d+$
+       0  #3  ^error: maximum authentication attempts exceeded for (?:invalid user )?\S* from <HOST> port \d+ ssh2 \[preauth\]$
+       0  #4  ^Disconnecting (?:authenticating|invalid) user \S* <HOST> port \d+: Too many authentication failures \[preauth\]$
+       1  #5  ^Connection (?:closed|reset) by (?:authenticating|invalid) user \S* <HOST> port \d+ \[preauth\]$
+       0  #6  ^Unable to negotiate with <HOST> port \d+: no matching .* found\. Their offer: .*\[preauth\]$
+
+Failures by address:
+  192.0.2.7    3
+  2001:db8::9  1
+
+Matched nothing (1 of 1):
+  Accepted publickey for fwg from 192.0.2.1 port 50122 ssh2: ED25519 SHA256:x
