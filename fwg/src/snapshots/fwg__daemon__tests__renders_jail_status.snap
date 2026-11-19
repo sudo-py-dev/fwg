@@ -1,0 +1,16 @@
+---
+source: fwg/src/daemon.rs
+expression: "render_jail(&sshd(),\n&[ban(\"192.0.2.7\", \"sshd\", 3598), ban(\"192.0.2.8\", \"sshd\", 60)])"
+---
+Jail:      sshd
+Filter:    sshd
+Log:       journal
+Bans when: 5 failures within 10m
+Ban time:  1h
+Tracked:   3 address(es) with recent failures
+Bans:      2 since fwgd started
+Banned:    2 right now
+
+Address    Time left
+192.0.2.7  59m 58s
+192.0.2.8  1m

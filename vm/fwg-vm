@@ -9,6 +9,7 @@
 #   vm/fwg-vm up     <debian|ubuntu>        boot (first boot provisions via cloud-init)
 #   vm/fwg-vm ssh    <debian|ubuntu> [cmd]  shell or run a command as user `fwg` (passwordless sudo)
 #   vm/fwg-vm push   <debian|ubuntu> <file> [dest]   copy a file into the VM (default dest: ~)
+#   vm/fwg-vm pull   <debian|ubuntu> <file> <dest>   copy a file out of the VM (path relative to ~)
 #   vm/fwg-vm down   <debian|ubuntu>        clean shutdown
 #   vm/fwg-vm reset  <debian|ubuntu>        shut down and delete the overlay (fresh VM next `up`)
 #   vm/fwg-vm status                        show which VMs are running
@@ -23,6 +24,8 @@ readonly BOOT_TIMEOUT_SECS=300
 readonly DISK_SIZE=10G
 readonly MEMORY_MB=2048
 readonly CPUS=2
+# Installed by cloud-init on first boot; `up` checks they really are.
+readonly PACKAGES=(nftables openssh-server python3 socat netcat-openbsd conntrack iproute2)
 
 die() { printf 'fwg-vm: %s\n' "$*" >&2; exit 1; }
 
@@ -75,13 +78,7 @@ users:
 ssh_pwauth: false
 package_update: true
 packages:
-  - nftables
-  - openssh-server
-  - python3
-  - socat
-  - netcat-openbsd
-  - conntrack
-  - iproute2
+$(printf '  - %s\n' "${PACKAGES[@]}")
 EOF
   : > "$SEED/vendor-data"
 }
@@ -121,6 +118,12 @@ cmd_up() {
   done
   echo "waiting for cloud-init to finish provisioning ..."
   ssh "${ssh_opts[@]}" -p "$SSH_PORT" fwg@127.0.0.1 'cloud-init status --wait >/dev/null; cloud-init status'
+  # cloud-init reports success even when apt could not reach the mirror.
+  local installed
+  installed="$(ssh "${ssh_opts[@]}" -p "$SSH_PORT" fwg@127.0.0.1 \
+    "dpkg-query -W -f='\${db:Status-Status}\n' ${PACKAGES[*]} 2>/dev/null | grep -cx installed" || true)"
+  [[ "$installed" == "${#PACKAGES[@]}" ]] \
+    || die "$NAME: provisioning did not install the packages (network?); try: vm/fwg-vm reset $NAME"
   echo "$NAME ready: vm/fwg-vm ssh $NAME"
 }
 
@@ -135,6 +138,13 @@ cmd_push() {
   [[ -f "${2:-}" ]] || die "file not found: ${2:-<none>}"
   is_running || die "$NAME is not running"
   scp "${ssh_opts[@]}" -P "$SSH_PORT" "$2" "fwg@127.0.0.1:${3:-}"
+}
+
+cmd_pull() {
+  vm_config "$1"
+  [[ -n "${2:-}" && -n "${3:-}" ]] || die "usage: fwg-vm pull <vm> <file> <dest>"
+  is_running || die "$NAME is not running"
+  scp "${ssh_opts[@]}" -P "$SSH_PORT" "fwg@127.0.0.1:$2" "$3"
 }
 
 cmd_down() {
@@ -167,9 +177,9 @@ cmd_console() { vm_config "$1"; exec tail -f "$LOG"; }
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
-    up|ssh|push|down|reset|console) [[ $# -ge 1 ]] || die "usage: fwg-vm $cmd <debian|ubuntu>"; "cmd_$cmd" "$@" ;;
+    up|ssh|push|pull|down|reset|console) [[ $# -ge 1 ]] || die "usage: fwg-vm $cmd <debian|ubuntu>"; "cmd_$cmd" "$@" ;;
     status) cmd_status ;;
-    *) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
   esac
 }
 

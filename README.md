@@ -1,10 +1,10 @@
 # fwg
 
 A simple, fast firewall for Linux, written in Rust on top of nftables.
-`fwg` (short for *fwguard*) uses ufw-style commands; log-based banning in the
-style of fail2ban is planned next.
+`fwg` (short for *fwguard*) uses ufw-style commands, and its daemon `fwgd` bans
+addresses that keep failing to log in, in the style of fail2ban.
 
-> **Status:** early development (Phase 1: the firewall CLI). Not yet ready for production.
+> **Status:** early development (0.1 alpha). Not yet ready for production.
 
 ## Usage
 
@@ -28,15 +28,48 @@ when ufw or firewalld is also active.
 
 Run `fwg --help` for all commands.
 
+## Banning (`fwgd`)
+
+`fwgd` reads logs (the systemd journal by default), counts failures per source
+address with *filters*, and bans repeat offenders in the kernel according to
+*jails*. Bans live in their own nftables table, `inet fwg_ban`, so `fwg reload`
+and `fwg disable` never lift them; they expire in the kernel by themselves and are
+restored after a reboot.
+
+| What | Where |
+|---|---|
+| Jails (yours to edit) | `/etc/fwg/jails.d/*.toml` — example: [`dist/jails.d/sshd.toml`](dist/jails.d/sshd.toml) |
+| Shipped filters | `/usr/share/fwg/filters/*.toml` — from [`filters/`](filters) |
+| Your own filters, or overrides of shipped ones (same name wins) | `/etc/fwg/filters/*.toml` |
+| Ban history | `/var/lib/fwg/fwg.db` |
+| Control socket (root only) | `/run/fwg/fwgd.sock` |
+
+```bash
+sudo fwg banned                       # banned addresses, their jail and the time left
+sudo fwg ban 192.0.2.7 --time 1d      # ban by hand (default 1h)
+sudo fwg unban 192.0.2.7
+sudo fwg jail list
+sudo fwg jail status sshd
+sudo fwgd --check                     # validate jails and filters without starting
+```
+
+Add your own management network to a jail's `ignore` list so a mistyped password
+cannot lock you out.
+
 ## Install from source
 
 Requires Rust 1.89+ and the `nftables` package.
 
 ```bash
 cargo build --release
-sudo install -m 0755 target/release/fwg /usr/sbin/fwg
-sudo install -m 0644 dist/fwg.service /etc/systemd/system/fwg.service
+sudo install -m 0755 target/release/fwg target/release/fwgd /usr/sbin/
+sudo install -m 0644 dist/fwg.service dist/fwgd.service /etc/systemd/system/
+sudo install -D -m 0644 filters/sshd.toml /usr/share/fwg/filters/sshd.toml
+sudo install -d -m 0750 /etc/fwg /etc/fwg/jails.d
+sudo install -m 0644 dist/jails.d/sshd.toml /etc/fwg/jails.d/sshd.toml
+sudo systemctl daemon-reload
 sudo systemctl enable fwg.service     # loads the rules at boot
+sudo systemctl enable --now fwgd.service
 ```
 
 ## Development

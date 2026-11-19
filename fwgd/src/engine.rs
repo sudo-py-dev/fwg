@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use fwg_ipc::{BanInfo, JailStatus, Request, Response};
 use fwg_nft::{Backend, BanTime, NftError, ban, ensure_ban_table, unban};
 use fwg_store::{BanRecord, Store};
-use fwg_watch::{LogEvent, LogSource, Watcher};
+use fwg_watch::{LogEvent, LogSource, Span, Watcher};
 use tracing::{info, warn};
 
 /// Jail name recorded for bans made by hand.
@@ -204,6 +204,7 @@ where
                     },
                     max_retry: jail.max_retry(),
                     find_time_secs: jail.find_time().as_secs(),
+                    ban_time_secs: jail.ban_time_for(0).as_secs(),
                     tracked: j.watcher.tracked(),
                     bans_since_start: j.bans_since_start,
                 }
@@ -254,7 +255,10 @@ where
             .await?;
         self.forget(addr);
         info!(%addr, seconds = time.duration().as_secs(), "banned by hand");
-        Ok(format!("banned {addr} for {}s", time.duration().as_secs()))
+        Ok(format!(
+            "banned {addr} for {}",
+            Span::from_secs(time.duration().as_secs())
+        ))
     }
 
     async fn unban(&mut self, addr: IpAddr, now: Duration) -> Result<String> {
@@ -394,6 +398,10 @@ mod tests {
             panic!()
         };
         assert_eq!(jails[0].bans_since_start, 2);
+        assert_eq!(
+            jails[0].ban_time_secs, 600,
+            "the first-ban length, not the doubled one"
+        );
     }
 
     #[tokio::test]
@@ -423,7 +431,7 @@ mod tests {
         assert_eq!(
             response,
             Response::Done {
-                message: "banned 198.51.100.1 for 120s".into()
+                message: "banned 198.51.100.1 for 2m".into()
             }
         );
         assert_eq!(fake.applied().last(), Some(&ban_batch("198.51.100.1", 120)));

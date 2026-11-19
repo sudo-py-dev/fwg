@@ -3,7 +3,7 @@
 //! Addresses are from the documentation ranges (RFC 5737, RFC 3849).
 
 // Test helpers should fail loudly, like the tests themselves.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::net::IpAddr;
 
@@ -129,4 +129,136 @@ fn programs() {
     let f = sshd();
     assert!(f.handles_program("sshd") && f.handles_program("sshd-session"));
     assert!(!f.handles_program("sudo"));
+}
+
+#[test]
+fn shipped_jail_uses_the_journal_and_the_defaults() {
+    let jails =
+        fwg_watch::Jail::parse_file(include_str!("../../../dist/jails.d/sshd.toml")).unwrap();
+    let [jail] = jails.as_slice() else {
+        panic!("expected one jail, got {}", jails.len())
+    };
+    assert_eq!(jail.name(), "sshd");
+    assert_eq!(jail.filter(), "sshd");
+    assert_eq!(jail.log(), &fwg_watch::LogSource::Journal);
+    assert_eq!(jail.max_retry(), 5);
+    assert_eq!(jail.find_time().as_secs(), 600);
+    assert_eq!(jail.ban_time_for(0).as_secs(), 3600);
+    assert_eq!(
+        jail.ban_time_for(3).as_secs(),
+        3600,
+        "no increment by default"
+    );
+}
+
+/// Real lines, captured from the journal in the test VMs (`vm/smoke-test.sh` saves
+/// them to `vm/state/<vm>-sshd-capture.txt`), with the address and port replaced.
+/// Each group is what one failed connection logs, in order; `true` marks a line
+/// that counts as a failure.
+const REAL_OPENSSH: &[(&str, bool)] = &[
+    // OpenSSH 10.0p2 (Debian 13, `_COMM=sshd-session`) and 9.6p1 (Ubuntu 24.04,
+    // `_COMM=sshd`) log exactly these texts; only the process name differs.
+    // Wrong password for an existing user: 2 failures.
+    (
+        "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.0.2.1  user=fwg",
+        false,
+    ),
+    (
+        "Failed password for fwg from 192.0.2.1 port 45533 ssh2",
+        true,
+    ),
+    (
+        "Connection closed by authenticating user fwg 192.0.2.1 port 45533 [preauth]",
+        true,
+    ),
+    // Wrong password for a user that does not exist: 3 failures.
+    ("Invalid user nosuchuser from 192.0.2.1 port 37307", true),
+    (
+        "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.0.2.1",
+        false,
+    ),
+    (
+        "Failed password for invalid user nosuchuser from 192.0.2.1 port 37307 ssh2",
+        true,
+    ),
+    (
+        "Connection closed by invalid user nosuchuser 192.0.2.1 port 37307 [preauth]",
+        true,
+    ),
+    // A key the server does not accept, existing user: 1 failure.
+    (
+        "Connection closed by authenticating user fwg 192.0.2.1 port 44435 [preauth]",
+        true,
+    ),
+    // ... and a user that does not exist: 2 failures.
+    ("Invalid user nosuchuser from 192.0.2.1 port 42373", true),
+    (
+        "Connection closed by invalid user nosuchuser 192.0.2.1 port 42373 [preauth]",
+        true,
+    ),
+    // Out of attempts (MaxAuthTries 6): 6 "Failed password" lines, then these.
+    (
+        "error: maximum authentication attempts exceeded for fwg from 192.0.2.1 port 58537 ssh2 [preauth]",
+        true,
+    ),
+    (
+        "Disconnecting authenticating user fwg 192.0.2.1 port 58537: Too many authentication failures [preauth]",
+        true,
+    ),
+    (
+        "PAM 5 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.0.2.1  user=fwg",
+        false,
+    ),
+    (
+        "error: maximum authentication attempts exceeded for invalid user nobody2 from 192.0.2.1 port 45187 ssh2 [preauth]",
+        true,
+    ),
+    (
+        "Disconnecting invalid user nobody2 192.0.2.1 port 45187: Too many authentication failures [preauth]",
+        true,
+    ),
+    // A client with only outdated algorithms: 1 failure.
+    (
+        "Unable to negotiate with 192.0.2.1 port 49683: no matching key exchange method found. Their offer: diffie-hellman-group1-sha1,ext-info-c,kex-strict-c-v00@openssh.com [preauth]",
+        true,
+    ),
+];
+
+/// The same connection over IPv6 (wrong password, unknown user), from both VMs.
+const REAL_OPENSSH_IPV6: &[(&str, bool)] = &[
+    (
+        "Invalid user no-such-user from 2001:db8::1 port 56511",
+        true,
+    ),
+    (
+        "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=2001:db8::1",
+        false,
+    ),
+    (
+        "Failed password for invalid user no-such-user from 2001:db8::1 port 56511 ssh2",
+        true,
+    ),
+    (
+        "Connection closed by invalid user no-such-user 2001:db8::1 port 56511 [preauth]",
+        true,
+    ),
+];
+
+fn check_real_lines(lines: &[(&str, bool)], expected: &str) {
+    let expected: IpAddr = expected.parse().unwrap();
+    for (message, counts) in lines {
+        let found = source(message);
+        if *counts {
+            assert_eq!(found, Some(expected), "should count: {message}");
+        } else {
+            assert_eq!(found, None, "should not count: {message}");
+        }
+    }
+}
+
+#[test]
+fn real_openssh_lines() {
+    assert!(REAL_OPENSSH.len() > 10);
+    check_real_lines(REAL_OPENSSH, "192.0.2.1");
+    check_real_lines(REAL_OPENSSH_IPV6, "2001:db8::1");
 }

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Full-system smoke test (tier 4): install fwg in a test VM, check the SSH
-# lockout guard over a real SSH login, every rule kind on that distro's nft,
-# ufw coexistence, and that the rules come back after a reboot.
+# Full-system smoke test (tier 4): install fwg and fwgd in a test VM, check the
+# SSH lockout guard over a real SSH login, every rule kind on that distro's nft,
+# ufw coexistence, that failed SSH logins get banned (from a network namespace
+# inside the VM), and that rules and bans come back after a reboot.
 #
 #   vm/smoke-test.sh [debian|ubuntu ...]     (default: both)
 #
-# Each run starts from a factory-fresh VM (vm/fwg-vm reset).
+# Each run starts from a factory-fresh VM (vm/fwg-vm reset). What that VM's sshd
+# logged for each kind of failed login is saved to vm/state/<vm>-sshd-capture.txt.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,12 +19,16 @@ run_vm() {
   echo "=== $name"
   "$VM" reset "$name" >/dev/null
   "$VM" up "$name" >/dev/null
-  for f in "$ROOT/target/release/fwg" "$ROOT/dist/fwg.service" "$ROOT/vm/guest-checks.sh"; do
+  for f in "$ROOT/target/release/fwg" "$ROOT/target/release/fwgd" "$ROOT/dist/fwg.service" \
+           "$ROOT/dist/fwgd.service" "$ROOT/vm/guest-checks.sh"; do
     "$VM" push "$name" "$f" >/dev/null
   done
+  # Both are called sshd.toml; guest-checks.sh installs them under that name.
+  "$VM" push "$name" "$ROOT/filters/sshd.toml" sshd-filter.toml >/dev/null
+  "$VM" push "$name" "$ROOT/dist/jails.d/sshd.toml" sshd-jail.toml >/dev/null
 
   local failed=0
-  for phase in install enable rules ufw; do
+  for phase in install enable rules ufw sshd-capture fwgd-install bans; do
     echo "[$phase]"
     "$VM" ssh "$name" "bash guest-checks.sh $phase" || failed=1
   done
@@ -39,12 +45,13 @@ run_vm() {
     sleep 3
   done
   "$VM" ssh "$name" "bash guest-checks.sh after-reboot" || failed=1
+  "$VM" pull "$name" sshd-capture.txt "$ROOT/vm/state/$name-sshd-capture.txt" >/dev/null || failed=1
 
   "$VM" down "$name" >/dev/null
   return "$failed"
 }
 
-cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" -p fwg
+cargo build --release --quiet --manifest-path "$ROOT/Cargo.toml" -p fwg -p fwgd
 
 vms=("$@")
 (( ${#vms[@]} )) || vms=(debian ubuntu)

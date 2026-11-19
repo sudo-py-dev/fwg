@@ -1,0 +1,7 @@
+---
+source: fwg/src/daemon.rs
+expression: "render_jails(&[sshd(), web])"
+---
+Jail        Filter  Log                       Tracked  Bans
+sshd        sshd    journal                   3        2
+nginx-auth  nginx   /var/log/nginx/error.log  0        0
