@@ -27,33 +27,37 @@ check() { # check DESCRIPTION COMMAND...
 contains() { grep -qF -- "$2" <<<"$1"; }
 fwg_loaded() { sudo nft list tables | grep -qx 'table inet fwg'; }
 
-readonly SERVER=10.200.0.1
+readonly SERVER=10.200.0.1 SERVER6=fd20::1
 readonly ASKPASS=/tmp/fwg-wrong-password
 in_kernel() { sudo nft list set inet fwg_ban "ban$([[ $1 == *:* ]] && echo 6 || echo 4)" | grep -qwF -- "$1"; }
 not() { ! "$@"; }
 listed() { sudo fwg banned | awk -v addr="$1" -v jail="$2" '$1 == addr && $2 == jail {found = 1} END {exit !found}'; }
-can_connect() { sudo ip netns exec attacker timeout 3 bash -c "</dev/tcp/$SERVER/22"; }
+can_connect() { sudo ip netns exec attacker timeout 3 bash -c "</dev/tcp/${1:-$SERVER}/22"; }
 
-# The attacker namespace: the VM is 10.200.0.1, attackers use .2 and up.
+# The attacker namespace: the VM is 10.200.0.1 and fd20::1, attackers use .2 and
+# up, and fd20::2. nodad: the addresses are usable at once, not after DAD.
 attacker_net() {
   sudo ip netns add attacker
   sudo ip link add veth-vm type veth peer name veth-att netns attacker
   sudo ip addr add "$SERVER/24" dev veth-vm
+  sudo ip addr add "$SERVER6/64" dev veth-vm nodad
   sudo ip link set veth-vm up
   sudo ip netns exec attacker ip link set lo up
   for host in 2 3 11 12 13 14 15 16; do
     sudo ip netns exec attacker ip addr add "10.200.0.$host/24" dev veth-att
   done
+  sudo ip netns exec attacker ip addr add fd20::2/64 dev veth-att nodad
   sudo ip netns exec attacker ip link set veth-att up
 }
 
 # One SSH login attempt from SOURCE as USER; every password it sends is wrong.
 attack() { # attack SOURCE USER [ssh options...]
-  local source="$1" user="$2"; shift 2
+  local source="$1" user="$2" server="$SERVER"; shift 2
+  [[ "$source" == *:* ]] && server="$SERVER6"
   sudo ip netns exec attacker env SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force \
     timeout 20 ssh -F /dev/null -b "$source" -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=QUIET "$@" \
-    "$user@$SERVER" true </dev/null >/dev/null 2>&1 || true
+    "$user@$server" true </dev/null >/dev/null 2>&1 || true
 }
 with_password() { attack "$@" -o PubkeyAuthentication=no -o PreferredAuthentications=password -o NumberOfPasswordPrompts=1; }
 with_key() { attack "$@" -o PreferredAuthentications=publickey -o IdentitiesOnly=yes -i /tmp/fwg-unknown-key; }
@@ -152,8 +156,9 @@ case "${1:-}" in
     capture key-only-unknown     10.200.0.14 with_key 10.200.0.14 no-such-user
     capture too-many-passwords   10.200.0.15 attack 10.200.0.15 fwg -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=10
     capture old-client           10.200.0.16 attack 10.200.0.16 fwg -o KexAlgorithms=diffie-hellman-group1-sha1
+    capture ipv6-unknown-user    fd20::2     with_password fd20::2 no-such-user
     check "sshd logged the failures ($(grep -vc '^#' "$out") lines)" test "$(grep -vc '^#' "$out")" -ge 10
-    check "every kind was logged" test "$(grep -v '^#' "$out" | cut -d' ' -f1 | sort -u | wc -l)" = 6
+    check "every kind was logged" test "$(grep -v '^#' "$out" | cut -d' ' -f1 | sort -u | wc -l)" = 7
     ;;
   fwgd-install)
     sudo install -m 0755 ~/fwgd /usr/sbin/fwgd
@@ -189,6 +194,11 @@ case "${1:-}" in
     # Bans that must come back after the reboot: one from the jail, one by hand.
     attack_until_banned 10.200.0.3 120 with_key 10.200.0.3 fwg
     check "key-only failures banned 10.200.0.3 (after $tries connections)" in_kernel 10.200.0.3
+    attack_until_banned fd20::2 60 with_password fd20::2 admin
+    check "IPv6 failed logins banned fd20::2 (after $tries connections)" in_kernel fd20::2
+    check "it can no longer reach port 22 over IPv6" not can_connect "$SERVER6"
+    check "IPv4 from the same attacker still allowed" can_connect
+    check "fwg banned lists the IPv6 address under sshd" listed fd20::2 sshd
     check "fwg ban by hand" contains "$(sudo fwg ban 192.0.2.50 --time 2h)" "banned 192.0.2.50 for 2h"
     check "fwg ban IPv6 by hand" contains "$(sudo fwg ban 2001:db8::50 --time 2h)" "banned 2001:db8::50 for 2h"
     check "manual ban listed as manual" listed 192.0.2.50 manual
@@ -203,6 +213,8 @@ case "${1:-}" in
     check "jail ban restored in the kernel" in_kernel 10.200.0.3
     check "manual ban restored in the kernel" in_kernel 192.0.2.50
     check "IPv6 ban restored in the kernel" in_kernel 2001:db8::50
+    check "IPv6 jail ban restored in the kernel" in_kernel fd20::2
+    check "fwg banned lists the IPv6 jail ban" listed fd20::2 sshd
     check "fwg banned lists the jail ban" listed 10.200.0.3 sshd
     check "fwg banned lists the manual ban" listed 192.0.2.50 manual
     check "unbanned address stayed unbanned" not in_kernel 10.200.0.2
