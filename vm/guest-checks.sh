@@ -29,11 +29,13 @@ check() { # check DESCRIPTION COMMAND...
   fi
 }
 contains() { grep -qF -- "$2" <<<"$1"; }
-fwg_loaded() { sudo nft list tables | grep -qx 'table inet fwg'; }
+# No `grep -q` after a pipe here: it exits at the first match, nft then dies of
+# SIGPIPE if it had more to write, and pipefail turns the match into a failure.
+fwg_loaded() { sudo nft list tables | grep -x 'table inet fwg' >/dev/null; }
 
 readonly SERVER=10.200.0.1 SERVER6=fd20::1
 readonly ASKPASS=/tmp/fwg-wrong-password
-in_kernel() { sudo nft list set inet fwg_ban "ban$([[ $1 == *:* ]] && echo 6 || echo 4)" | grep -qwF -- "$1"; }
+in_kernel() { sudo nft list set inet fwg_ban "ban$([[ $1 == *:* ]] && echo 6 || echo 4)" | grep -wF -- "$1" >/dev/null; }
 not() { ! "$@"; }
 listed() { sudo fwg banned | awk -v addr="$1" -v jail="$2" '$1 == addr && $2 == jail {found = 1} END {exit !found}'; }
 can_connect() { sudo ip netns exec attacker timeout 3 bash -c "</dev/tcp/${1:-$SERVER}/22"; }
