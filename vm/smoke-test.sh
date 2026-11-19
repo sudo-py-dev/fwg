@@ -2,7 +2,8 @@
 # Full-system smoke test (tier 4): install fwg and fwgd in a test VM, check the
 # SSH lockout guard over a real SSH login, every rule kind on that distro's nft,
 # ufw coexistence, that failed SSH logins get banned (from a network namespace
-# inside the VM), and that rules and bans come back after a reboot.
+# inside the VM), that `--confirm` undoes a change that locks out SSH, and that
+# rules and bans come back after a reboot.
 #
 #   vm/smoke-test.sh [debian|ubuntu ...]     (default: both)
 #
@@ -28,13 +29,32 @@ run_vm() {
   "$VM" push "$name" "$ROOT/dist/jails.d/sshd.toml" sshd-jail.toml >/dev/null
 
   local failed=0
-  for phase in install enable rules ufw sshd-capture fwgd-install bans; do
+  for phase in install enable rules ufw sshd-capture fwgd-install bans confirm-keep; do
     echo "[$phase]"
     "$VM" ssh "$name" "bash guest-checks.sh $phase" || failed=1
   done
 
   echo "[new SSH login with the firewall on]"
   if "$VM" ssh "$name" true; then echo "  ok    ssh still works"; else echo "  FAIL  ssh blocked"; failed=1; fi
+
+  echo "[--confirm undoes a change that locks out SSH]"
+  "$VM" ssh "$name" "bash guest-checks.sh confirm-lockout" || failed=1
+  if "$VM" ssh "$name" true 2>/dev/null; then
+    echo "  FAIL  new SSH logins still work without the SSH rule"; failed=1
+  else
+    echo "  ok    new SSH logins are blocked"
+  fi
+  local started=$SECONDS
+  until "$VM" ssh "$name" true 2>/dev/null; do
+    (( SECONDS - started < 60 )) || break
+    sleep 2
+  done
+  if "$VM" ssh "$name" true 2>/dev/null; then
+    echo "  ok    SSH works again after the rollback ($((SECONDS - started)) s later)"
+    "$VM" ssh "$name" "bash guest-checks.sh confirm-after" || failed=1
+  else
+    echo "  FAIL  SSH still blocked 60 s later"; failed=1
+  fi
 
   echo "[reboot]"
   "$VM" ssh "$name" 'sudo systemctl reboot' 2>/dev/null || true
