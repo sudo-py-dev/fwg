@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use fwg_core::ConfigDir;
 use fwg_nft::{Nft, roll_back_if_due, unix_now};
-use fwg_store::TursoStore;
+use fwg_store::SqliteStore;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
 use tracing::{error, info, warn};
@@ -150,7 +150,7 @@ async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
         .mode(0o700)
         .create(&paths.state_dir)
         .with_context(|| format!("cannot create {}", paths.state_dir.display()))?;
-    let store = TursoStore::open(&paths.database())
+    let store = SqliteStore::open(&paths.database())
         .await
         .with_context(|| format!("cannot open {}", paths.database().display()))?;
     let nft = Nft::locate()?;
