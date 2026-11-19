@@ -2,8 +2,9 @@
 //!
 //! On start it loads the jails, opens the database, creates the kernel ban table
 //! and puts back bans still running (kernel sets are empty after a reboot). Then
-//! one loop handles log events, control requests, saving journal positions and
-//! pruning old history, until SIGTERM or SIGINT.
+//! one loop handles log events, control requests, saving journal positions,
+//! pruning old history and undoing firewall changes made with `fwg --confirm`
+//! that were not confirmed in time, until SIGTERM or SIGINT.
 
 mod config;
 mod engine;
@@ -20,7 +21,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use fwg_nft::Nft;
+use fwg_core::ConfigDir;
+use fwg_nft::{Nft, roll_back_if_due, unix_now};
 use fwg_store::TursoStore;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, mpsc};
@@ -34,6 +36,8 @@ use crate::sources::{SourceSpec, Sources, now};
 const SAVE_CURSORS_EVERY: Duration = Duration::from_secs(5);
 /// Old ban history is pruned this often (and at start).
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// How often to look for an unconfirmed `--confirm` change whose time is up.
+const ROLLBACK_CHECK_EVERY: Duration = Duration::from_secs(1);
 /// Log events waiting for the main loop; sources wait when it is full.
 const EVENT_QUEUE: usize = 10_000;
 
@@ -122,7 +126,8 @@ async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
     let store = TursoStore::open(&paths.database())
         .await
         .with_context(|| format!("cannot open {}", paths.database().display()))?;
-    let engine = Engine::new(Nft::locate()?, store, watchers);
+    let nft = Nft::locate()?;
+    let engine = Engine::new(nft.clone(), store, watchers);
     let restored = engine.start(now()).await?;
     info!(restored, "ban table ready");
 
@@ -149,6 +154,9 @@ async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut save_cursors = tokio::time::interval(SAVE_CURSORS_EVERY);
     let mut prune = tokio::time::interval(PRUNE_EVERY);
+    let mut rollback = tokio::time::interval(ROLLBACK_CHECK_EVERY);
+    let mut rollback_error = None;
+    let config = ConfigDir::new(&paths.config_dir);
     loop {
         tokio::select! {
             Some((index, event)) = events.recv() => {
@@ -170,6 +178,9 @@ async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
                 Ok(deleted) => info!(deleted, "pruned old ban history"),
                 Err(e) => warn!("cannot prune ban history: {e:#}"),
             },
+            _ = rollback.tick() => {
+                check_rollback(&config, &nft, &mut rollback_error).await;
+            }
             _ = terminate.recv() => break,
             _ = interrupt.recv() => break,
         }
@@ -186,4 +197,34 @@ async fn daemon(paths: Paths, watchers: Vec<fwg_watch::Watcher>) -> Result<()> {
         warn!("cannot remove {}: {e}", paths.socket.display());
     }
     Ok(())
+}
+
+/// Undoes a `--confirm` change whose deadline has passed.
+///
+/// Runs on a blocking thread: it takes the config lock and runs `nft`. A failure
+/// is retried every second but logged only when its message changes, so a
+/// broken pending file does not flood the journal.
+async fn check_rollback(config: &ConfigDir, nft: &Nft, last_error: &mut Option<String>) {
+    let (config, nft) = (config.clone(), nft.clone());
+    let result = tokio::task::spawn_blocking(move || roll_back_if_due(&config, &nft, unix_now()))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r.map_err(anyhow::Error::from));
+    match result {
+        Ok(rolled_back) => {
+            if rolled_back {
+                warn!(
+                    "a firewall change made with --confirm was not confirmed in time; the previous rules are back"
+                );
+            }
+            *last_error = None;
+        }
+        Err(e) => {
+            let message = format!("{e:#}");
+            if last_error.as_deref() != Some(message.as_str()) {
+                error!("cannot roll back an unconfirmed firewall change: {message}");
+                *last_error = Some(message);
+            }
+        }
+    }
 }

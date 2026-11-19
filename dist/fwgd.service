@@ -16,9 +16,14 @@ StateDirectory=fwg
 StateDirectoryMode=0700
 RuntimeDirectory=fwg
 RuntimeDirectoryMode=0700
+# /etc/fwg is writable because fwgd undoes `fwg --confirm` changes that were not
+# confirmed in time: it takes the config lock and puts the previous rules back.
+ConfigurationDirectory=fwg
+ConfigurationDirectoryMode=0750
+ReadWritePaths=/etc/fwg
 
-# fwgd reads logs and the journal, writes its own directories, and talks to
-# nftables over netlink; it needs nothing else.
+# fwgd reads logs and the journal, writes its own directories and /etc/fwg, and
+# talks to nftables over netlink; it needs nothing else.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
 ProtectSystem=strict
