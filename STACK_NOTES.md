@@ -455,6 +455,18 @@ they switch, in PR-sized steps:
 | 3d ✅ | `fwg import ufw` and `fwg import fail2ban` (crate `fwg-import`), dry run unless `--apply`. ufw: each `### tuple ###` line of `user.rules`/`user6.rules` becomes fwg rule words checked by the normal parser; rules for both IP versions are kept once, IPv6-only ones stay in place relative to the shared ones; policies from `/etc/default/ufw`, logging from `ufw.conf`; route rules and protocols other than TCP/UDP are listed as not imported, and ufw's FORWARD DROP is explained, not imported (it would stop Docker, §4). fail2ban: `jail.conf` < `jail.d/*.conf` < `jail.local` < `jail.d/*.local`, key by key, read the way fail2ban 1.0.2 reads them (§9.4); only the enabled jails fwg has filters for, only `maxretry`, `findtime`, `bantime`, `bantime.increment`/`maxtime`, `ignoreip`; values over fwg's limits are clamped with a note; written to a new `jails.d/imported-fail2ban.toml`, never over a file, and a jail already in `jails.d` is shown, not overwritten. Verified in both VMs against ufw's and fail2ban's own reports (`ufw show added`, `fail2ban-client -d`). | Moving an existing machine over without retyping its setup. |
 | 3e ✅ | `.deb` packages for `fwg` (CLI + `fwg.service`) and `fwgd` (daemon, unit, filters, jail defaults as conffiles), built by a script with `dpkg-deb`, installed and smoke-tested in the VMs. | `apt install ufw fail2ban`. |
 
+The packages use Debian version `0.1.0~alpha.1`. The Ubuntu 24.04 build requires
+`libc6 (>= 2.39)` and `libgcc-s1 (>= 4.2)`, derived by `dpkg-shlibdeps`. Both
+packages also depend on `nftables` and `systemd`. The VM upgrade test uses a
+lower-version fixture with a different shipped SSH jail default so it exercises
+dpkg's handling of a conffile edited locally and changed by the new package.
+
+Lintian 2.122.0 reports `no-changelog` and `no-manual-page` for both packages.
+The changelog and man pages are scheduled after Phase 3. Its
+`non-standard-dir-perm` warnings for `/etc/fwg` and `/etc/fwg/jails.d` are
+intentional because both directories use mode `0750` to restrict access to
+firewall and jail configuration.
+
 Decided against for now:
 
 - **Route/forward rules (`ufw route`)**: fwg has the `routed` default policy; per-rule
@@ -513,6 +525,7 @@ copied). Change before the first public release if another licence is preferred.
 - [ ] Add older targets to the VM matrix (Debian 12, Ubuntu 22.04 for nft 1.0.2).
 - [ ] Verify nft ≥ 1.0.2 / kernel ≥ 5.10 support in the VM matrix (1.0.9 and 1.1.3 verified).
 - [x] `.deb` packaging for Debian 13 and Ubuntu 24.04 (step 3e).
+- [ ] RPM packaging.
 - [x] Turso spike (features, crash recovery) — see §5. MSRV checked by CI.
 - [ ] SQLite power-loss test (VM hard reset during writes).
 - [ ] Switch `fwg-store` back to Turso once it reaches 1.0 (§5).

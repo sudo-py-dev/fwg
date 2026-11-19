@@ -96,8 +96,8 @@ dist/build-debs.sh
 sudo apt install ./target/deb/fwg_*.deb ./target/deb/fwgd_*.deb
 ```
 
-APT enables and starts both units. The firewall starts applying policy only after
-you run `sudo fwg enable`. The daemon starts with the `sshd` jail enabled.
+APT enables and starts both units. On a fresh install, the firewall stays disabled
+until you run `sudo fwg enable`. The daemon starts with the `sshd` jail enabled.
 Edit the other jail files under `/etc/fwg/jails.d/` to opt in.
 
 To uninstall, run `sudo fwg disable` while the CLI is still installed to clear

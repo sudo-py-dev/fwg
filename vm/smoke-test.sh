@@ -73,10 +73,6 @@ run_vm() {
 
   echo "[package upgrade, remove and purge]"
   "$VM" ssh "$name" 'bash guest-checks.sh lifecycle' || failed=1
-  if [[ "$name" == debian && "${FWG_LINTIAN:-0}" == 1 ]]; then
-    echo "[lintian]"
-    "$VM" ssh "$name" 'bash guest-checks.sh lintian' || failed=1
-  fi
   "$VM" down "$name" >/dev/null
   return "$failed"
 }

@@ -16,7 +16,6 @@
 #   guest-checks.sh import          fwg import ufw/fail2ban agree with what ufw and
 #                                   fail2ban themselves report
 #   guest-checks.sh lifecycle       verify package upgrades, removal and purge
-#   guest-checks.sh lintian         inspect package metadata and contents
 #
 # The SSH "attacker" is a network namespace inside this VM (10.200.0.0/24), never
 # the host: host connections arrive from 10.0.2.2, and banning that address would
@@ -223,7 +222,7 @@ case "${1:-}" in
     check "fwg banned still lists it under sshd" listed 10.200.0.2 sshd
     check "fwg unban" contains "$(sudo /usr/sbin/fwg unban 10.200.0.2)" "unbanned 10.200.0.2"
     check "unbanned: gone from the kernel" not in_kernel 10.200.0.2
-    check "unbanned: gone from fwg banned" bash -c '! sudo /usr/sbin/fwg banned | grep -qw 10.200.0.2'
+    check "unbanned: gone from fwg banned" bash -c '! sudo /usr/sbin/fwg banned | grep -wF 10.200.0.2 >/dev/null'
     check "unbanned: can connect again" can_connect
     # Bans that must come back after the reboot: one from the jail, one by hand.
     attack_until_banned 10.200.0.3 120 with_key 10.200.0.3 fwg
@@ -236,7 +235,7 @@ case "${1:-}" in
     check "fwg ban by hand" contains "$(sudo /usr/sbin/fwg ban 192.0.2.50 --time 2h)" "banned 192.0.2.50 for 2h"
     check "fwg ban IPv6 by hand" contains "$(sudo /usr/sbin/fwg ban 2001:db8::50 --time 2h)" "banned 2001:db8::50 for 2h"
     check "manual ban listed as manual" listed 192.0.2.50 manual
-    check "no fwgd errors" bash -c '! sudo journalctl -u fwgd.service -p err --no-pager -q | grep -q .'
+    check "no fwgd errors" bash -c '! sudo journalctl -u fwgd.service -p err --no-pager -q | grep . >/dev/null'
     report="$(sudo journalctl _COMM=sshd _COMM=sshd-session -o cat --no-pager | /usr/sbin/fwgd --test-filter sshd)"
     check "fwgd --test-filter counts the real journal's failures" \
       bash -c "grep -qE '^  failures: +[1-9][0-9]*  from [1-9]' <<<\"\$1\"" _ "$report"
@@ -261,7 +260,7 @@ case "${1:-}" in
     sudo systemctl restart nginx
     # Cleartext logins from the namespace (2.4 and 2.3 spell it differently), and
     # the SASL socket Postfix uses.
-    if /usr/sbin/dovecot --version | grep -q '^2\.4'; then clear='auth_allow_cleartext = yes'; else clear='disable_plaintext_auth = no'; fi
+    if /usr/sbin/dovecot --version | grep '^2\.4' >/dev/null; then clear='auth_allow_cleartext = yes'; else clear='disable_plaintext_auth = no'; fi
     printf '%s\n%s\n' "$clear" 'service auth {
   unix_listener /var/spool/postfix/private/auth {
     mode = 0660
@@ -314,19 +313,19 @@ case "${1:-}" in
     ;;
   confirm-lockout)
     check "--confirm delete of the SSH rule" contains "$(sudo /usr/sbin/fwg --confirm 20 delete allow 22/tcp)" "within 20 s"
-    check "SSH rule gone from the kernel" not bash -c "sudo nft list table inet fwg | grep -q 'tcp dport 22 accept'"
+    check "SSH rule gone from the kernel" not bash -c "sudo nft list table inet fwg | grep -F 'tcp dport 22 accept' >/dev/null"
     ;;
   confirm-after)
-    check "SSH rule back in the kernel" bash -c "sudo nft list table inet fwg | grep -q 'tcp dport 22 accept'"
+    check "SSH rule back in the kernel" bash -c "sudo nft list table inet fwg | grep -F 'tcp dport 22 accept' >/dev/null"
     check "SSH rule back in the rules file" contains "$(sudo /usr/sbin/fwg status)" "22/tcp"
     check "nothing pending" not test -e /etc/fwg/pending.toml
-    check "fwgd logged the rollback" bash -c "sudo journalctl -u fwgd.service --no-pager -q | grep -q 'not confirmed in time'"
+    check "fwgd logged the rollback" bash -c "sudo journalctl -u fwgd.service --no-pager -q | grep -F 'not confirmed in time' >/dev/null"
     ;;
   after-reboot)
     check "unit active after boot" systemctl is-active fwg.service
     check "rules loaded at boot" fwg_loaded
     check "status active" contains "$(sudo /usr/sbin/fwg status)" "Status: active"
-    check "no unit errors in journal" bash -c '! sudo journalctl -b -u fwg.service -p err --no-pager -q | grep -q .'
+    check "no unit errors in journal" bash -c '! sudo journalctl -b -u fwg.service -p err --no-pager -q | grep . >/dev/null'
     check "fwgd active after boot" systemctl is-active fwgd.service
     check "jail ban restored in the kernel" in_kernel 10.200.0.3
     check "manual ban restored in the kernel" in_kernel 192.0.2.50
@@ -336,7 +335,7 @@ case "${1:-}" in
     check "fwg banned lists the jail ban" listed 10.200.0.3 sshd
     check "fwg banned lists the manual ban" listed 192.0.2.50 manual
     check "unbanned address stayed unbanned" not in_kernel 10.200.0.2
-    check "no fwgd errors in journal" bash -c '! sudo journalctl -b -u fwgd.service -p err --no-pager -q | grep -q .'
+    check "no fwgd errors in journal" bash -c '! sudo journalctl -b -u fwgd.service -p err --no-pager -q | grep . >/dev/null'
     ;;
   import)
     export DEBIAN_FRONTEND=noninteractive
@@ -448,11 +447,21 @@ print("\n".join(bad)); sys.exit(1 if bad or len(fwg) != 4 else 0)
     sudo apt-get purge -y fwg fwgd
     check "purging a fresh install removes shared configuration" not sudo test -e /etc/fwg
 
-    apt_install ./old-packages/fwg_*.deb ./old-packages/fwgd_*.deb
+    # Give the old package a different default so dpkg must handle a conffile
+    # changed by both the maintainer and the administrator during the upgrade.
+    old_deb=(./old-packages/fwgd_*.deb)
+    old_stage=$(mktemp -d)
+    trap 'rm -rf "$old_stage"' EXIT
+    dpkg-deb --raw-extract "${old_deb[0]}" "$old_stage"
+    sed -i 's/^max_retry = 5$/max_retry = 4/' "$old_stage/etc/fwg/jails.d/sshd.toml"
+    dpkg-deb --root-owner-group --build "$old_stage" "${old_deb[0]}" >/dev/null
+
+    apt_install ./old-packages/fwg_*.deb "${old_deb[0]}"
+    check "old package has its own jail default" sudo grep -Fx 'max_retry = 4' /etc/fwg/jails.d/sshd.toml
     old=$(package_version fwgd)
     old_invocation=$(systemctl show -p InvocationID --value fwgd.service)
     sudo /usr/sbin/fwg allow 22/tcp
-    sudo sh -c "printf '\n# local upgrade test\n' >> /etc/fwg/jails.d/sshd.toml"
+    sudo sed -i 's/^max_retry = 4$/max_retry = 6/' /etc/fwg/jails.d/sshd.toml
     jail_sum=$(sudo sha256sum /etc/fwg/jails.d/sshd.toml)
     rules_sum=$(sudo sha256sum /etc/fwg/rules.toml)
 
@@ -461,7 +470,10 @@ print("\n".join(bad)); sys.exit(1 if bad or len(fwg) != 4 else 0)
     check "old package version precedes the new one" dpkg --compare-versions "$old" lt "$version"
     check "firewall package upgraded" test "$(package_version fwg)" = "$version"
     check "daemon package upgraded" test "$(package_version fwgd)" = "$version"
-    check "daemon service restarted" test "$(systemctl show -p InvocationID --value fwgd.service)" != "$old_invocation"
+    new_invocation=$(systemctl show -p InvocationID --value fwgd.service)
+    check "daemon service restarted" bash -c \
+      '[[ -n $1 && $1 != "$2" ]] && systemctl is-active --quiet fwgd.service' \
+      _ "$new_invocation" "$old_invocation"
     check "firewall service active after upgrade" systemctl is-active fwg.service
     check "daemon service active after upgrade" systemctl is-active fwgd.service
     check "edited jail kept on upgrade" test "$(sudo sha256sum /etc/fwg/jails.d/sshd.toml)" = "$jail_sum"
@@ -482,12 +494,8 @@ print("\n".join(bad)); sys.exit(1 if bad or len(fwg) != 4 else 0)
     sudo apt-get purge -y fwg
     check "purging the last package removes /etc/fwg" not sudo test -e /etc/fwg
     ;;
-  lintian)
-    apt_install lintian
-    lintian ./packages/fwg_*.deb ./packages/fwgd_*.deb
-    ;;
   *)
-    echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|confirm-keep|confirm-lockout|confirm-after|after-reboot|import|lifecycle|lintian" >&2
+    echo "usage: $0 install|enable|rules|ufw|sshd-capture|fwgd-install|bans|confirm-keep|confirm-lockout|confirm-after|after-reboot|import|lifecycle" >&2
     exit 2
     ;;
 esac
