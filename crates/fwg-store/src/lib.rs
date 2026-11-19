@@ -5,21 +5,21 @@
 //!   back after a reboot (kernel sets start empty);
 //! - the last journal cursor per source, so reading resumes where it stopped.
 //!
-//! [`Store`] is the interface; [`SqliteStore`] keeps it on disk and [`MemoryStore`]
-//! in memory (tests, and running without a database). Turso was used before and
-//! comes back once it reaches 1.0; the trait keeps that change to one module.
+//! [`Store`] is the interface; [`TursoStore`] keeps it on disk and [`MemoryStore`]
+//! in memory (tests, and running without a database). The trait keeps the storage
+//! engine to one module (SQLite through `rusqlite` was used for a while).
 //!
 //! Times are [`Duration`]s since the Unix epoch, in whole seconds.
 
 mod memory;
-mod sqlite_store;
+mod turso_store;
 
 use std::future::Future;
 use std::net::IpAddr;
 use std::time::Duration;
 
 pub use memory::MemoryStore;
-pub use sqlite_store::{SCHEMA_VERSION, SqliteStore};
+pub use turso_store::{SCHEMA_VERSION, TursoStore};
 
 /// One ban, as recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
