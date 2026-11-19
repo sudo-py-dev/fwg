@@ -1,4 +1,4 @@
-//! The same checks against every [`Store`], plus on-disk behaviour of `SqliteStore`.
+//! The same checks against every [`Store`], plus on-disk behaviour of `TursoStore`.
 
 // Test helpers should fail loudly, like the tests themselves.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -7,7 +7,7 @@ use std::net::IpAddr;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use fwg_store::{BanRecord, MemoryStore, SCHEMA_VERSION, SqliteStore, Store, StoreError};
+use fwg_store::{BanRecord, MemoryStore, SCHEMA_VERSION, Store, StoreError, TursoStore};
 
 fn s(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -105,23 +105,23 @@ async fn memory_store() {
 }
 
 #[tokio::test]
-async fn sqlite_store() {
-    contract(SqliteStore::in_memory().await.unwrap()).await;
+async fn turso_store() {
+    contract(TursoStore::in_memory().await.unwrap()).await;
 }
 
 #[tokio::test]
-async fn sqlite_keeps_data_across_reopen() {
+async fn turso_keeps_data_across_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fwg.db");
     {
-        let store = SqliteStore::open(&path).await.unwrap();
+        let store = TursoStore::open(&path).await.unwrap();
         store
             .record_ban(&ban("192.0.2.1", "sshd", 100, 9_999_999_999))
             .await
             .unwrap();
         store.set_cursor("journal", "c1").await.unwrap();
     }
-    let store = SqliteStore::open(&path).await.unwrap();
+    let store = TursoStore::open(&path).await.unwrap();
     assert_eq!(store.active_bans(s(200)).await.unwrap().len(), 1);
     assert_eq!(
         store.cursor("journal").await.unwrap().as_deref(),
@@ -130,18 +130,24 @@ async fn sqlite_keeps_data_across_reopen() {
 }
 
 #[tokio::test]
-async fn sqlite_refuses_a_newer_schema() {
+async fn turso_refuses_a_newer_schema() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fwg.db");
-    drop(SqliteStore::open(&path).await.unwrap());
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
+    drop(TursoStore::open(&path).await.unwrap());
+    {
+        let db = turso::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute(
             "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
-            [SCHEMA_VERSION + 1],
+            (SCHEMA_VERSION + 1,),
         )
+        .await
         .unwrap();
-    let err = SqliteStore::open(&path).await.unwrap_err();
+    }
+    let err = TursoStore::open(&path).await.unwrap_err();
     assert!(
         matches!(err, StoreError::UnsupportedSchema { found, .. } if found == SCHEMA_VERSION + 1),
         "{err}"
@@ -149,46 +155,33 @@ async fn sqlite_refuses_a_newer_schema() {
 }
 
 #[tokio::test]
-async fn sqlite_reports_corrupt_rows() {
+async fn turso_reports_corrupt_rows() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fwg.db");
-    drop(SqliteStore::open(&path).await.unwrap());
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
+    drop(TursoStore::open(&path).await.unwrap());
+    {
+        let db = turso::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute(
             "INSERT INTO bans (addr, jail, banned_at, until, failures, manual) VALUES ('not-an-ip', 'x', 1, 9999999999, 1, 0)",
-            [],
+            (),
         )
+        .await
         .unwrap();
-    let store = SqliteStore::open(&path).await.unwrap();
+    }
+    let store = TursoStore::open(&path).await.unwrap();
     assert!(matches!(
         store.active_bans(s(0)).await,
         Err(StoreError::Corrupt(_))
     ));
 }
 
-#[tokio::test]
-async fn sqlite_writes_durably() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("fwg.db");
-    let store = SqliteStore::open(&path).await.unwrap();
-    store.set_cursor("journal", "c1").await.unwrap();
-    // A second connection sees what the store's connection set for the file.
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let mode: String = conn
-        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(mode, "wal");
-    drop(store);
-    let version: String = conn
-        .query_row("SELECT sqlite_version()", [], |r| r.get(0))
-        .unwrap();
-    assert!(version.starts_with("3."), "{version}");
-}
-
 /// `kill -9` during writes: every ban reported as written must survive.
 #[tokio::test]
-async fn sqlite_survives_being_killed_mid_write() {
+async fn turso_survives_being_killed_mid_write() {
     if let Some(path) = std::env::var_os("FWG_STORE_CRASH_WRITER") {
         crash_writer(path.as_ref()).await;
         return;
@@ -200,7 +193,7 @@ async fn sqlite_survives_being_killed_mid_write() {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "sqlite_survives_being_killed_mid_write",
+                "turso_survives_being_killed_mid_write",
                 "--nocapture",
                 "--test-threads=1",
             ])
@@ -220,7 +213,7 @@ async fn sqlite_survives_being_killed_mid_write() {
         reported += written as u64;
     }
     assert!(reported > 0, "the writer never got to write");
-    let store = SqliteStore::open(&path).await.unwrap();
+    let store = TursoStore::open(&path).await.unwrap();
     let stored = u64::from(
         store
             .previous_bans("192.0.2.9".parse().unwrap(), "crash", s(0))
@@ -236,7 +229,7 @@ async fn sqlite_survives_being_killed_mid_write() {
 
 async fn crash_writer(path: &std::path::Path) {
     use std::io::Write;
-    let store = SqliteStore::open(path).await.unwrap();
+    let store = TursoStore::open(path).await.unwrap();
     let mut out = std::io::stdout();
     // Runs until the parent kills it.
     for i in 0..u64::MAX {
