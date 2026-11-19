@@ -10,7 +10,7 @@ mod status;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use fwg_core::ConfigDir;
 use fwg_nft::{ActiveBan, Backend, Batch, Nft, NftError, TableRef};
@@ -36,12 +36,25 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let client = Client::new(cli.socket, client::TIMEOUT);
+    if cli.command.misplaced_confirm() {
+        bail!("put --confirm before the rule, e.g. `fwg delete --confirm 60 allow 22/tcp`");
+    }
+    if cli.confirm.is_some() {
+        if !cli.command.takes_confirm() {
+            bail!("--confirm only applies to commands that change the rules");
+        }
+        // Only fwgd can undo the change once this process is gone; check it runs.
+        client
+            .call(&fwg_ipc::Request::Status {})
+            .context("--confirm needs fwgd running to undo the change")?;
+    }
     let app = App::new(
         ConfigDir::new(cli.config_dir),
         SystemNft,
         Environment::detect(),
-    );
-    let client = Client::new(cli.socket, client::TIMEOUT);
+    )
+    .with_confirm(cli.confirm);
     let stdout = io::stdout();
     let out = &mut stdout.lock();
     match cli.command {
@@ -72,6 +85,8 @@ fn run(cli: Cli) -> Result<()> {
             app.reset(out)
         }
         Cmd::Show => app.show(out),
+        Cmd::Confirm => app.confirm(out),
+        Cmd::Rollback => app.rollback(out),
         Cmd::Ban { addr, time } => daemon::ban(&client, addr, time, out),
         Cmd::Unban { addr } => daemon::unban(&client, addr, out),
         Cmd::Banned => daemon::banned(&client, out),

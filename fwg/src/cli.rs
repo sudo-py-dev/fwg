@@ -19,9 +19,20 @@ pub struct Cli {
     #[arg(long, global = true, env = "FWG_SOCKET", value_name = "PATH", default_value = fwg_ipc::SOCKET_PATH)]
     pub socket: PathBuf,
 
+    /// Roll a rule change back after SECS seconds unless `fwg confirm` runs
+    /// first; protects against locking yourself out. Needs fwgd.
+    #[arg(long, global = true, value_name = "SECS",
+          value_parser = clap::value_parser!(u64).range(MIN_CONFIRM_SECS..=MAX_CONFIRM_SECS))]
+    pub confirm: Option<u64>,
+
     #[command(subcommand)]
     pub command: Cmd,
 }
+
+/// Shortest `--confirm` window: time to read the message and type `fwg confirm`.
+pub const MIN_CONFIRM_SECS: u64 = 5;
+/// Longest `--confirm` window.
+pub const MAX_CONFIRM_SECS: u64 = 3600;
 
 const EXAMPLES: &str = "\
 Examples:
@@ -30,7 +41,7 @@ Examples:
   fwg limit 22/tcp
   fwg deny out 25
   fwg default deny incoming
-  fwg enable
+  fwg enable --confirm 60   # undone in 60 s unless `fwg confirm` runs
   fwg status --numbered
   fwg delete 2
   fwg ban 192.0.2.7 --time 1d
@@ -103,6 +114,10 @@ pub enum Cmd {
     },
     /// Print the nftables ruleset fwg would load, without loading it.
     Show,
+    /// Keep a change made with `--confirm`.
+    Confirm,
+    /// Undo a change made with `--confirm` now, without waiting.
+    Rollback,
     /// Ban an address now (asks fwgd).
     Ban {
         /// IPv4 or IPv6 address.
@@ -215,6 +230,38 @@ pub enum Toggle {
     Off,
 }
 
+impl Cmd {
+    /// Whether `--confirm` was typed after the rule, where it reads as a rule
+    /// word (rule words may start with `-`, e.g. in comments).
+    pub fn misplaced_confirm(&self) -> bool {
+        let words: &[String] = match self {
+            Self::Allow(r) | Self::Deny(r) | Self::Reject(r) | Self::Limit(r) => &r.words,
+            Self::Insert { rule, .. } => &rule.words,
+            Self::Delete { target } => target,
+            _ => return false,
+        };
+        words
+            .iter()
+            .any(|w| w == "--confirm" || w.starts_with("--confirm="))
+    }
+
+    /// Whether the command changes the rules, so `--confirm` applies to it.
+    pub const fn takes_confirm(&self) -> bool {
+        matches!(
+            self,
+            Self::Enable { .. }
+                | Self::Allow(_)
+                | Self::Deny(_)
+                | Self::Reject(_)
+                | Self::Limit(_)
+                | Self::Insert { .. }
+                | Self::Delete { .. }
+                | Self::Default { .. }
+                | Self::Logging { .. }
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +292,37 @@ mod tests {
 
         assert!(Cli::try_parse_from(["fwg", "allow"]).is_err());
         assert!(Cli::try_parse_from(["fwg", "insert", "0", "allow", "22"]).is_err());
+    }
+
+    #[test]
+    fn parses_confirm() {
+        let parse = |args: &[&str]| Cli::try_parse_from(args).map(|c| c.confirm);
+        assert_eq!(parse(&["fwg", "enable"]).unwrap(), None);
+        assert!(
+            parse(&["fwg", "enable", "--confirm"]).is_err(),
+            "needs SECS"
+        );
+        assert_eq!(
+            parse(&["fwg", "--confirm", "30", "enable"]).unwrap(),
+            Some(30)
+        );
+        assert_eq!(
+            parse(&["fwg", "delete", "--confirm", "120", "allow", "22/tcp"]).unwrap(),
+            Some(120)
+        );
+        // After the rule it is a rule word; `misplaced_confirm` reports that.
+        let cli = Cli::try_parse_from(["fwg", "allow", "22/tcp", "--confirm", "60"]).unwrap();
+        assert!(cli.command.misplaced_confirm());
+        let cli = Cli::try_parse_from(["fwg", "delete", "allow", "22", "--confirm=9"]).unwrap();
+        assert!(cli.command.misplaced_confirm());
+        let cli = Cli::try_parse_from(["fwg", "allow", "22/tcp", "comment", "a-b"]).unwrap();
+        assert!(!cli.command.misplaced_confirm());
+        for bad in ["4", "3601", "1m", "-5"] {
+            assert!(
+                parse(&["fwg", "enable", &format!("--confirm={bad}")]).is_err(),
+                "accepted {bad}"
+            );
+        }
     }
 
     #[test]
